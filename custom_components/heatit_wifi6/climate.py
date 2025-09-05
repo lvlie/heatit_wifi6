@@ -95,6 +95,8 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         self._net_wifiSignalStrength = None
         self._net_status = None
         self._hw_firmware = None
+        
+        self._available = True
 
     # HA call this when the entity is ready and added to the HA entity list.
     async def async_added_to_hass(self):
@@ -105,6 +107,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
     async def async_update(self):
         data = await self._api.get_status()
         if data:
+            self._available = True
             match data.get("parameters",{}).get("sensorMode", None):              # return temp depending on used sensor (sensorMode)
                 case 0: self._temperature = data.get("floorTemperature", None)         # mode: F
                 case 3 | 4: self._temperature = data.get("externalTemperature", None)  # mode: A2, A2F
@@ -156,6 +159,8 @@ class HeatitWiFi6Thermostat(ClimateEntity):
             _LOGGER.info("Status fetched from the Heatit WiFi6: %s", self.name)
         else:
             _LOGGER.warning("Status fetch failed from the Heatit WiFi6: %s.", self.name)
+            self._available = False
+            self._param_operatingMode = None
             self._hvac_mode = HVACMode.OFF      # Set UI disabled/Off, when status can't fetched.
             self._hvac_action = HVACAction.OFF
             self._net_status = "fail"
@@ -262,6 +267,12 @@ class HeatitWiFi6Thermostat(ClimateEntity):
             "net_status": self._net_status,
             "hw_firmware": self._hw_firmware           
        }
+    
+    @property
+    def available(self) -> bool:
+       """Return True if device is available."""
+       return self._available
+
 
     async def async_set_temperature(self, **kwargs):
         # If the Heatit device is switched off don't change the target temperatures.

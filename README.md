@@ -13,8 +13,7 @@ This software was made by 3rd party. The device manufacturer ("Heatit") has no a
 
 # Installation
 * Initially, the thermostat must be configured correctly and connected to your wifi network using the manufacturer's Heatit mobile app.
-* Next, clone or simply download this heatit_wifi6 repository for HA integration.
-* Copy heatit_wifi6 folder with it contents into HA's config/custom_components folder. Create custom_components folder, if not exists.
+* Go in HACS, click on Integrations, click on the three little dots at top of the screen and selection "custom repositories", add this github url, select   "Integration" as repository, and click ADD. Then go to the Integrations tab of HACS, and install the "HeatIT WiFi Thermostat" integration.
 * Restart Home Assistant.
 * Be sure, that the thermostat is online and connected to your wifi, before trying to add it into HA.
 * Goto Home Assistant -> Settings -> Devices & Services -> Add Integration
