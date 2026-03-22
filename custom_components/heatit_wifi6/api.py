@@ -25,7 +25,7 @@ class HeatitWiFi6API:
                     async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
                         async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
                             text = await response.text()
-                            _LOGGER.debug(f"Response (get %s) data:\n%s", url, str(text))
+                            _LOGGER.debug("Response (get %s) data:\n%s", url, str(text))
                             return await self._parse_json(text)
             except asyncio.TimeoutError:
                 if attempt < retries:
@@ -50,10 +50,17 @@ class HeatitWiFi6API:
 
     async def _post(self, endpoint, data, timeout=15, retries=2):  # simple general http-post with retries
         url = f"{self.__host}{endpoint}"
-        _LOGGER.debug("aiohttp - %s url: %s", method, url)
+        _LOGGER.debug("aiohttp - POST url: %s", url)
 
         if self._session:
-            return await self._do_request(self._session, method, url, data)
+            try:
+                async with self._session.post(url, json=data, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+                    text = await response.text()
+                    _LOGGER.debug("Response (post %s) data:\n%s", url, str(text))
+                    return await self._parse_json(text)
+            except Exception as e:
+                _LOGGER.error("POST %s failed with session: %s", url, str(e))
+                return {}
 
         for attempt in range(retries + 1):
             try:
@@ -103,10 +110,10 @@ class HeatitWiFi6API:
                 async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
                     async with session.delete(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
                         text = await response.text()
-                        _LOGGER.debug(f"Response (delete %s) data:\n%s", url, str(text))
+                        _LOGGER.debug("Response (delete %s) data:\n%s", url, str(text))
                         return await self._parse_json(text)
         except Exception as e:
-            _LOGGER.error("%s %s failed: %s", method, url, str(e))
+            _LOGGER.error("DELETE %s failed: %s", url, str(e))
             return {}
 
 
@@ -147,10 +154,10 @@ class HeatitWiFi6API:
         response = await self._post(API_PARAMETERS.rstrip("/"), data, timeout=20, retries=3)
 
         if response and response.get("status", "Failed") == "Success":
-            _LOGGER.debug(f"set_parameter({parameter, value}): {response.get("value", "Success, but no value of response: %s")}", str(response))
+            _LOGGER.debug("set_parameter(%s, %s): %s", parameter, value, response.get("value", "Success, but no value of response"))
             return response
         
-        _LOGGER.error("set_parameter({parameter, value}): %s", str(response))
+        _LOGGER.error("set_parameter(%s, %s): %s", parameter, value, str(response))
         return {}
 
 
@@ -164,8 +171,8 @@ class HeatitWiFi6API:
         response = await self._delete(f"{API_RESET.rstrip("/")}/{reset_type}")
 
         if response and response.get("status", "Failed") == "Success":
-            _LOGGER.info(f"reset_device({reset_type}): {response.get("value", "Success, but no value of response. (?)")}")
+            _LOGGER.info("reset_device(%s): %s", reset_type, response.get("value", "Success, but no value of response. (?)"))
             return response
         
-        _LOGGER.error("reset_device({reset_type}): %s", str(response))
+        _LOGGER.error("reset_device(%s): %s", reset_type, str(response))
         return {}
