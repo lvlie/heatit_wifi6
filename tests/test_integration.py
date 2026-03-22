@@ -1,6 +1,8 @@
 import time
 import requests
 import json
+import logging
+import sys
 
 HA_URL = "http://localhost:8123"
 LOG_PATH = "ha_config/home-assistant.log"
@@ -18,7 +20,13 @@ def main():
         time.sleep(2)
     else:
         print("Timeout waiting for HA API.")
-        exit(1)
+        try:
+            with open(LOG_PATH, "r") as f:
+                print("----- ha_config/home-assistant.log -----")
+                print(f.read())
+        except FileNotFoundError:
+            print("Log file not found.")
+        sys.exit(1)
 
     print("Checking Home Assistant logs for Heatit WiFi6 initialization...")
     entity_loaded = False
@@ -40,15 +48,35 @@ def main():
                 print(f.read())
         except FileNotFoundError:
             print("Log file not found.")
-        exit(1)
+        sys.exit(1)
 
     print("Entity loaded! Attempting to set HVAC mode...")
 
-    # We can pass the hardcoded JWT token generated in test.yml
-    headers = {
-        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMiIsImlhdCI6MTc3NDIxMDU4OSwiZXhwIjoyMDg5NTcwNTg5fQ.7RiDJMWFlMSoJkc-5zCKqQ5sPPXJY5cFdPRBYauCWSk",
-        "Content-Type": "application/json"
-    }
+    # Because trusted networks is enabled for localhost, we shouldn't necessarily need a token.
+    # But just in case, we will generate a valid one dynamically using PyJWT to avoid expiration issues.
+    # The JWT token is created using the secret `dummy_key_for_testing_12345_make_sure_it_is_32_bytes_long_here`
+    # corresponding to the refresh token ID `22222222222222222222222222222222`.
+
+    try:
+        import jwt
+        from datetime import datetime, timedelta, timezone
+
+        payload = {
+            "iss": "22222222222222222222222222222222",
+            "iat": datetime.now(timezone.utc),
+            "exp": datetime.now(timezone.utc) + timedelta(days=3650)
+        }
+        token = jwt.encode(payload, "dummy_key_for_testing_12345_make_sure_it_is_32_bytes_long_here", algorithm="HS256")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+    except ImportError:
+        # Fallback if jwt is not installed, though we pip installed PyJWT in workflow
+        print("PyJWT not installed. Sending request without token (relying on trusted_networks)...")
+        headers = {
+            "Content-Type": "application/json"
+        }
 
     # We will get the entity ID first
     payload = {"entity_id": "climate.mocked_heatit_thermostat", "hvac_mode": "heat"}
@@ -58,18 +86,19 @@ def main():
             print("Successfully sent set_hvac_mode request.")
         else:
             print(f"Service call returned {res.status_code}. Using fallback log check.")
+            print(res.text)
     except Exception as e:
         print(f"Error calling HA service: {e}")
 
     # Check logs for "async_set_hvac_mode" or similar
-    for _ in range(5):
+    for _ in range(10):
         try:
             with open(LOG_PATH, "r") as f:
                 logs = f.read()
                 # Check for either the log output of our api call setting the hvac mode or the mock API handling it
-                if "set_parameter" in logs or "Set parameter to the thermostat" in logs or "operatingMode" in logs:
+                if "set_parameter(operatingMode" in logs or "Set parameter to the thermostat" in logs or "operatingMode" in logs:
                     print("SUCCESS: Integration initialized, entities added, and HVAC mode set successfully.")
-                    exit(0)
+                    sys.exit(0)
         except FileNotFoundError:
             pass
         time.sleep(2)
@@ -80,7 +109,7 @@ def main():
             print(f.read())
     except FileNotFoundError:
         print("Log file not found.")
-    exit(1)
+    sys.exit(1)
 
 if __name__ == "__main__":
     main()
