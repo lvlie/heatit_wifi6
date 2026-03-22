@@ -10,7 +10,6 @@ from homeassistant.components.climate.const import (
     PRESET_ECO,
     PRESET_NONE,
 )
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.const import UnitOfTemperature, CONF_HOST, CONF_NAME
 from datetime import timedelta
 from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL, DOMAIN
@@ -31,10 +30,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         host = entry.data[CONF_HOST]
         _LOGGER.info("Heatit WiFi6 async_setup_entry() name: %s, host: %s", name, host)
 
-        domain_data = hass.data[DOMAIN][entry.entry_id]
-        coordinator = domain_data["coordinator"]
-        api = domain_data["api"]
-
+        api = HeatitWiFi6API(host)
         # Use shorter timeout and fewer retries for faster startup - device will connect via polling if needed
         device_id = await api.get_device_id(retries=0, timeout=8)
         _LOGGER.debug("Name: %s, device_id: %s", name, device_id)
@@ -48,7 +44,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
             # Still create entity - it will retry during async_update
             device_id = f"unknown_{host.replace('.', '_')}"
 
-        entity = HeatitWiFi6Thermostat(hass, entry, coordinator, api, name, device_id)
+        entity = HeatitWiFi6Thermostat(hass, entry, api, name, device_id)
         # Don't update before add - let polling handle initial connection to speed up startup
         async_add_entities([entity], False)
         _LOGGER.info("Heatit WiFi6 %s has been added to the list of entities.", name)
@@ -61,11 +57,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
         )
         return False
 
-class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
-    _attr_has_entity_name = True
+class HeatitWiFi6Thermostat(ClimateEntity):
+    attr_has_entity_name = True
+    should_poll = False
+    SCAN_INTERVAL = timedelta(minutes=POLL_INTERVAL)
 
-    def __init__(self, hass, entry, coordinator, api, name, device_id):
-        super().__init__(coordinator)
+    def __init__(self, hass, entry, api, name, device_id):
         _LOGGER.debug("HeatitWiFi6Thermostat::__init__(): %s", name)
         self.hass = hass
         self.entry = entry
@@ -120,19 +117,25 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
 
         # Preset mode: either PRESET_NONE or PRESET_ECO
         self._preset_mode = PRESET_NONE
-        self._update_internal_state()
 
     async def async_added_to_hass(self):
-        await super().async_added_to_hass()
-        _LOGGER.info("async_added_to_hass(): Heatit WiFi6 integration is ready.")
+        # Try initial update with retry logic, but don't fail if device is slow to respond
+        # Polling will handle subsequent updates
+        try:
+            await self.async_update()
+        except Exception as e:
+            _LOGGER.debug(
+                "Initial update failed for %s (device may be slow to respond): %s. Polling will retry.",
+                self.name, str(e)
+            )
+        self.should_poll = True
+        _LOGGER.info(
+            "async_added_to_hass(): Heatit WiFi6 integration is ready and polling enabled."
+        )
 
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        self._update_internal_state()
-        self.async_write_ha_state()
-
-    def _update_internal_state(self):
-        data = self.coordinator.data
+    async def async_update(self):
+        # Use retry logic for first update attempts, normal timeout for regular polling
+        data = await self._api.get_status(retries=1, timeout=5)
         if data:
             self._available = True
             match data.get("parameters", {}).get("sensorMode", None):
@@ -150,10 +153,10 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
                 self._preset_mode = PRESET_NONE
             else:
                 self._preset_mode = PRESET_NONE
-            self._hvac_mode = self._heatit_operatingmode_to_hvac_mode(
+            self._hvac_mode = await self._heatit_operatingmode_to_hvac_mode(
                 self._param_operatingMode
             )
-            self._hvac_action = self._heatit_state_to_hvac_action(
+            self._hvac_action = await self._heatit_state_to_hvac_action(
                 data.get("state")
             )  # _hvac_mode must be set before _hvac_action.
             if not self._set_temperature_pending:
@@ -395,7 +398,7 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
                 "async_set_temperature(): The device %s is switched off. Target temperature can changed only when device is on.",
                 self._name,
             )
-            await self.coordinator.async_request_refresh()
+            await self.async_update()
             self.schedule_update_ha_state()
             self.hass.components.persistent_notification.create(
                 "Target temperature can changed only when Heatit WiFi6 device is ON.",
@@ -421,7 +424,7 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
         if await self._api.set_parameter(param, temperature):
             setattr(self, param, temperature)
             self._set_temperature_pending = False
-            await self.coordinator.async_request_refresh()
+            await self.async_update()
         self._set_temperature_pending = False  # also here, if set_parameter() fails.
 
     async def async_set_preset_mode(self, preset_mode):
@@ -434,16 +437,16 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
             _LOGGER.warning(
                 "async_set_preset_mode(): Unsupported preset_mode: %s", str(preset_mode)
             )
-        await self.coordinator.async_request_refresh()
+        await self.async_update()
 
     async def async_set_hvac_mode(self, hvac_mode, force=False):
         if not force and hvac_mode not in self.hvac_modes:
             _LOGGER.error("async_set_hvac_mode(): unsupported HVACMode: %s", str(hvac_mode))
             return
         if await self._api.set_parameter(
-            "operatingMode", self._hvac_mode_to_heatit_operatingmode(hvac_mode)
+            "operatingMode", await self._hvac_mode_to_heatit_operatingmode(hvac_mode)
         ):
-            await self.coordinator.async_request_refresh()
+            await self.async_update()
 
     def _hvac_mode_to_heatit_operatingmode(self, mode):
         match mode:
@@ -460,7 +463,7 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
                 )
                 return -1
 
-    def _heatit_operatingmode_to_hvac_mode(self, operatingmode):
+    async def _heatit_operatingmode_to_hvac_mode(self, operatingmode):
         # 0 = Off, 1 = Heat, 2 = Cool, 3 = Eco (Heat but using Eco setpoint)
         match operatingmode:
             case 0:
@@ -478,7 +481,7 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
                 )
                 return None
 
-    def _heatit_state_to_hvac_action(self, state):
+    async def _heatit_state_to_hvac_action(self, state):
         match state:
             case "Idle":
                 return (
