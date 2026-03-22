@@ -4,9 +4,10 @@ import logging
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode, HVACAction
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.const import UnitOfTemperature, CONF_HOST, CONF_NAME
 from datetime import timedelta
-from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL
+from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL, DOMAIN
 from .api import HeatitWiFi6API
 from .exceptions import CannotConnect
 
@@ -24,12 +25,14 @@ async def async_setup_entry(hass, entry, async_add_entities):
         host = entry.data[CONF_HOST]  # Get host from UI config
         _LOGGER.info("Heatit WiFi6 async_setup_entry() name: %s, host: %s", name, host)
 
-        api = HeatitWiFi6API(host)
+        domain_data = hass.data[DOMAIN][entry.entry_id]
+        coordinator = domain_data["coordinator"]
+        api = domain_data["api"]
         device_id = await api.get_device_id()
         _LOGGER.debug("Name: %s, device_id: %s", name, device_id)
         if device_id == "unknown": raise CannotConnect
 
-        entity = HeatitWiFi6Thermostat(hass, entry, api, name, device_id)
+        entity = HeatitWiFi6Thermostat(hass, entry, coordinator, api, name, device_id)
         async_add_entities([entity], True)
         _LOGGER.debug("Heatit WiFi6 %s has been added to the list of entities.", name)
         return True
@@ -40,12 +43,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
         _LOGGER.error("Unknown error when trying setup the device: %s. Setup has been interrupted. (%s)", name, str(err))
         return False  # =>failed, don't try again.
 
-class HeatitWiFi6Thermostat(ClimateEntity):
-    attr_has_entity_name = True
-    should_poll = False  # Turn polling on after entity is ready for working.
-    SCAN_INTERVAL = timedelta(minutes=POLL_INTERVAL)
+class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
+    _attr_has_entity_name = True
     
-    def __init__(self, hass, entry, api, name, device_id):
+    def __init__(self, hass, entry, coordinator, api, name, device_id):
+        super().__init__(coordinator)
         _LOGGER.debug("HeatitWiFi6Thermostat::__init__(): %s", name)
         self.hass = hass
         self.entry = entry
@@ -97,15 +99,20 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         self._hw_firmware = None
         
         self._available = True
+        self._update_internal_state()
 
     # HA call this when the entity is ready and added to the HA entity list.
     async def async_added_to_hass(self):
-        await self.async_update()    # auto poll off, start polling here..
-        self.should_poll = True     # turn on auto polling.
-        _LOGGER.info("async_added_to_hass(): Heatit WiFi6 integration is ready and polling enabled.")
+        await super().async_added_to_hass()
+        _LOGGER.info("async_added_to_hass(): Heatit WiFi6 integration is ready.")
 
-    async def async_update(self):
-        data = await self._api.get_status()
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._update_internal_state()
+        self.async_write_ha_state()
+
+    def _update_internal_state(self):
+        data = self.coordinator.data
         if data:
             self._available = True
             match data.get("parameters",{}).get("sensorMode", None):              # return temp depending on used sensor (sensorMode)
@@ -113,8 +120,8 @@ class HeatitWiFi6Thermostat(ClimateEntity):
                 case 3 | 4: self._temperature = data.get("externalTemperature", None)  # mode: A2, A2F
                 case _: self._temperature = data.get("internalTemperature", None)      # all other modes: A, AF, PWER
             self._param_operatingMode = data.get("parameters").get("operatingMode")
-            self._hvac_mode = await self._heatit_operatingmode_to_hvac_mode(self._param_operatingMode)
-            self._hvac_action =  await self._heatit_state_to_hvac_action(data.get("state"))  # note: _hvac_mode should be set before _hvac_action.
+            self._hvac_mode = self._heatit_operatingmode_to_hvac_mode(self._param_operatingMode)
+            self._hvac_action = self._heatit_state_to_hvac_action(data.get("state"))  # note: _hvac_mode should be set before _hvac_action.
             if not self._set_temperature_pending:  # refresh target temperatures only when no change pending.
                 self._param_coolingSetpoint = data.get("parameters", {}).get("coolingSetpoint", None)
                 self._param_heatingSetpoint = data.get("parameters", {}).get("heatingSetpoint", None)
@@ -170,17 +177,18 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         return f"heatit_wifi6_{self._device_id}"
 
     @property
-    def name(self):
-        if self._name:
-            return self._name
-        else:
-            return ""
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": self._name,
+            "manufacturer": "Heatit",
+            "model": "WiFi6 Thermostat",
+            "sw_version": self._hw_firmware,
+        }
 
-    @name.setter
-    def name(self, name):
-        if not name:
-            return
-        self._name= name
+    @property
+    def name(self):
+        return None
 
     @property
     def icon(self):
@@ -278,7 +286,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         # If the Heatit device is switched off don't change the target temperatures.
         if self._hvac_mode == HVACMode.OFF:
             _LOGGER.info("async_set_temperature(): The device %s is switched off. Target temperature can changed only when device is on.", self._name)
-            await self.async_update()
+            await self.coordinator.async_request_refresh()
             self.schedule_update_ha_state()
             self.hass.components.persistent_notification.create("Target temperature can changed only when Heatit WiFi6 device is ON.", title="Heatif WiFi6 Thermostat")
             return
@@ -295,7 +303,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         if await self._api.set_parameter(param, temperature):
             setattr(self, param, temperature)  # set value into coolingSetpoint, ecoSetpoint or heatingSetpoint.
             self._set_temperature_pending = False
-            await self.async_update()
+            await self.coordinator.async_request_refresh()
         self._set_temperature_pending = False # also here, if set_parameter() fails.
 
     async def async_set_preset_mode(self, preset_mode):
@@ -306,10 +314,10 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         if not force and hvac_mode not in self.hvac_modes:
             _LOGGER.error("async_set_hvac_mode(): unsupported HVACMode: %s", str(hvac_mode))
             return
-        if await self._api.set_parameter("operatingMode", await self._hvac_mode_to_heatit_operatingmode(hvac_mode)):
-            await self.async_update()
+        if await self._api.set_parameter("operatingMode", self._hvac_mode_to_heatit_operatingmode(hvac_mode)):
+            await self.coordinator.async_request_refresh()
 
-    async def _hvac_mode_to_heatit_operatingmode(self, mode):
+    def _hvac_mode_to_heatit_operatingmode(self, mode):
         match mode:
             case HVACMode.OFF:  return 0
             case HVACMode.HEAT: return 1
@@ -319,7 +327,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
                 return -1
 
     # Heatit's operatingMode = HVACMode
-    async def _heatit_operatingmode_to_hvac_mode(self, operatingmode):
+    def _heatit_operatingmode_to_hvac_mode(self, operatingmode):
         match operatingmode:
             case 0: return HVACMode.OFF   # Off.
             case 1: return HVACMode.HEAT  # Heating when needed by heatingSetpoint.
@@ -330,7 +338,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
                 return None
 
     # Heatit's state = HVACAction
-    async def _heatit_state_to_hvac_action(self, state):
+    def _heatit_state_to_hvac_action(self, state):
         match state:
             case "Idle": return HVACAction.OFF if self._hvac_mode == HVACMode.OFF else HVACAction.IDLE  # Note: _hvac_mode should be decided before _hvac_action.
             case "Heating": return HVACAction.HEATING  # Heating mode. Power on until temperature increased to the target (heatingSetpoint).
