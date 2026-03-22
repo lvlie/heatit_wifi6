@@ -29,15 +29,17 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = domain_data["coordinator"]
     api = domain_data["api"]
 
-    try:
-        device_id = await api.get_device_id()
-        if device_id == "unknown": raise CannotConnect
-    except CannotConnect:
-        _LOGGER.error("Connect failed to the device: %s", name)
-        return False
-    except Exception as err:
-        _LOGGER.error("Unknown error when trying setup the device: %s. Setup has been interrupted. (%s)", name, str(err))
-        return False
+    # Use device_id from coordinator data if available, fallback to api if missing
+    if coordinator.data and "id" in coordinator.data:
+        device_id = str(coordinator.data["id"])
+    else:
+        try:
+            device_id = await api.get_device_id(retries=0, timeout=8)
+            if device_id == "unknown":
+                device_id = f"unknown_{host.replace('.', '_')}"
+        except Exception as err:
+            _LOGGER.error("Unknown error when trying setup the device: %s. Setup has been interrupted. (%s)", name, str(err))
+            return False
 
     entities = [
         HeatitWiFi6TemperatureSensor(coordinator, name, device_id),

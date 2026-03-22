@@ -1,5 +1,7 @@
 import logging
+import asyncio
 from datetime import timedelta
+
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
@@ -17,6 +19,16 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Stagger device connection on startup to avoid all devices connecting at the same time.
+    entries = hass.config_entries.async_entries(DOMAIN)
+    try:
+        index = [e.entry_id for e in entries].index(entry.entry_id)
+    except ValueError:
+        index = 0  # fallback if not found; should never happen
+    wait_seconds = index * 2 + 2  # Always wait at least 2 seconds for the first, 4s for the second, etc.
+    if wait_seconds:
+        _LOGGER.info("Waiting %s seconds before connecting Heatit device for host: %s", wait_seconds, str(entry.data[CONF_HOST]))
+        await asyncio.sleep(wait_seconds)
     _LOGGER.info("Heatit async_setup_entry() called for host: %s", str(entry.data[CONF_HOST]))
 
     api = HeatitWiFi6API(entry.data[CONF_HOST])
