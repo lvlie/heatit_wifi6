@@ -12,7 +12,7 @@ from homeassistant.components.climate.const import (
 )
 from homeassistant.const import UnitOfTemperature, CONF_HOST, CONF_NAME
 from datetime import timedelta
-from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL
+from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL, DOMAIN
 from .api import HeatitWiFi6API
 from .exceptions import CannotConnect
 
@@ -448,7 +448,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         ):
             await self.async_update()
 
-    async def _hvac_mode_to_heatit_operatingmode(self, mode):
+    def _hvac_mode_to_heatit_operatingmode(self, mode):
         match mode:
             case HVACMode.OFF:
                 return 0
