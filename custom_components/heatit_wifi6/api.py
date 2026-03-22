@@ -11,8 +11,9 @@ _LOGGER = logging.getLogger(__name__)
 TLS_CHECK = True
 
 class HeatitWiFi6API:
-    def __init__(self, host):
+    def __init__(self, host, session=None):
         self.__host = host.rstrip("/")
+        self._session = session
 
     async def _get(self, endpoint, timeout=5, retries=0):  # simple general http-get with optional retries
         url = f"{self.__host}{endpoint}"
@@ -44,10 +45,15 @@ class HeatitWiFi6API:
                     return {}
         return {}
 
+    async def _delete(self, endpoint):  # simple general http-delete
+        return await self._request("DELETE", endpoint)
 
     async def _post(self, endpoint, data, timeout=15, retries=2):  # simple general http-post with retries
         url = f"{self.__host}{endpoint}"
-        _LOGGER.debug("aiohttp - Post url: %s", url)
+        _LOGGER.debug("aiohttp - %s url: %s", method, url)
+
+        if self._session:
+            return await self._do_request(self._session, method, url, data)
 
         for attempt in range(retries + 1):
             try:
@@ -100,7 +106,7 @@ class HeatitWiFi6API:
                         _LOGGER.debug(f"Response (delete %s) data:\n%s", url, str(text))
                         return await self._parse_json(text)
         except Exception as e:
-            _LOGGER.error("DELETE %s failed: %s", url, str(e))
+            _LOGGER.error("%s %s failed: %s", method, url, str(e))
             return {}
 
 
