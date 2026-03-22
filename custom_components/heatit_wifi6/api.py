@@ -19,14 +19,20 @@ class HeatitWiFi6API:
         url = f"{self.__host}{endpoint}"
         _LOGGER.debug("aiohttp - Get url: %s", url)
 
+        if self._session:
+            return await self.__get(self._session, url, timeout, retries)
+
+        async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
+            async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
+                return await self.__get(session, url, timeout, retries)
+
+    async def __get(self, session, url, timeout, retries):
         for attempt in range(retries + 1):
             try:
-                async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
-                    async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
-                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
-                            text = await response.text()
-                            _LOGGER.debug("Response (get %s) data:\n%s", url, str(text))
-                            return await self._parse_json(text)
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+                    text = await response.text()
+                    _LOGGER.debug("Response (get %s) data:\n%s", url, str(text))
+                    return await self._parse_json(text)
             except asyncio.TimeoutError:
                 if attempt < retries:
                     wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s...
@@ -45,31 +51,24 @@ class HeatitWiFi6API:
                     return {}
         return {}
 
-    async def _delete(self, endpoint):  # simple general http-delete
-        return await self._request("DELETE", endpoint)
-
     async def _post(self, endpoint, data, timeout=15, retries=2):  # simple general http-post with retries
         url = f"{self.__host}{endpoint}"
         _LOGGER.debug("aiohttp - POST url: %s", url)
 
         if self._session:
+            return await self.__post(self._session, url, data, timeout, retries)
+
+        async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
+            async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
+                return await self.__post(session, url, data, timeout, retries)
+
+    async def __post(self, session, url, data, timeout, retries):
+        for attempt in range(retries + 1):
             try:
-                async with self._session.post(url, json=data, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+                async with session.post(url, json=data, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
                     text = await response.text()
                     _LOGGER.debug("Response (post %s) data:\n%s", url, str(text))
                     return await self._parse_json(text)
-            except Exception as e:
-                _LOGGER.error("POST %s failed with session: %s", url, str(e))
-                return {}
-
-        for attempt in range(retries + 1):
-            try:
-                async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
-                    async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
-                        async with session.post(url, json=data, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
-                            text = await response.text()
-                            _LOGGER.debug("Response (post %s) data:\n%s", url, str(text))
-                            return await self._parse_json(text)
             except (asyncio.TimeoutError, aiohttp.ClientError) as e:
                 if attempt < retries:
                     wait_time = (attempt + 1) * 2
@@ -100,21 +99,41 @@ class HeatitWiFi6API:
                     return {}
         return {}
 
-
-    async def _delete(self, endpoint, timeout=5):  # simple general http-delete
+    async def _delete(self, endpoint, timeout=5, retries=0):  # simple general http-delete
         url = f"{self.__host}{endpoint}"
         _LOGGER.debug("aiohttp - Delete url: %s", url)
 
-        try:
-            async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
-                async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
-                    async with session.delete(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
-                        text = await response.text()
-                        _LOGGER.debug("Response (delete %s) data:\n%s", url, str(text))
-                        return await self._parse_json(text)
-        except Exception as e:
-            _LOGGER.error("DELETE %s failed: %s", url, str(e))
-            return {}
+        if self._session:
+            return await self.__delete(self._session, url, timeout, retries)
+
+        async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
+            async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
+                return await self.__delete(session, url, timeout, retries)
+
+    async def __delete(self, session, url, timeout, retries):
+        for attempt in range(retries + 1):
+            try:
+                async with session.delete(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+                    text = await response.text()
+                    _LOGGER.debug("Response (delete %s) data:\n%s", url, str(text))
+                    return await self._parse_json(text)
+            except asyncio.TimeoutError:
+                if attempt < retries:
+                    wait_time = (attempt + 1) * 2
+                    _LOGGER.debug("DELETE %s timed out (attempt %d/%d). Retrying in %d seconds...", url, attempt + 1, retries + 1, wait_time)
+                    await asyncio.sleep(wait_time)
+                else:
+                    _LOGGER.debug("DELETE %s failed after %d attempts: Timeout (device may be slow to respond)", url, retries + 1)
+                    return {}
+            except Exception as e:
+                if attempt < retries:
+                    wait_time = (attempt + 1) * 2
+                    _LOGGER.debug("DELETE %s failed (attempt %d/%d): %s. Retrying in %d seconds...", url, attempt + 1, retries + 1, str(e), wait_time)
+                    await asyncio.sleep(wait_time)
+                else:
+                    _LOGGER.error("DELETE %s failed after %d attempts: %s", url, retries + 1, str(e))
+                    return {}
+        return {}
 
 
     # aiohttp response.json() require a correct content-type header on the http response.
