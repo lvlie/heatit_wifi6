@@ -78,25 +78,40 @@ def main():
             "Content-Type": "application/json"
         }
 
-    # We will get the entity ID first
-    payload = {"entity_id": "climate.mocked_heatit_thermostat", "hvac_mode": "heat"}
+    # We will get the entity ID first by calling the states API
+    entity_id = "climate.mocked_heatit_thermostat"
+    try:
+        res = requests.get(f"{HA_URL}/api/states", headers=headers)
+        if res.status_code == 200:
+            states = res.json()
+            for state in states:
+                if state["entity_id"].startswith("climate.") and "heatit" in state["entity_id"]:
+                    entity_id = state["entity_id"]
+                    print(f"Found climate entity: {entity_id}")
+                    break
+        else:
+            print(f"Failed to fetch states, got {res.status_code}. Proceeding with fallback {entity_id}")
+    except Exception as e:
+        print(f"Error fetching states: {e}")
+
+    payload = {"entity_id": entity_id, "hvac_mode": "heat"}
     try:
         res = requests.post(f"{HA_URL}/api/services/climate/set_hvac_mode", json=payload, headers=headers)
         if res.status_code in [200, 201]:
-            print("Successfully sent set_hvac_mode request.")
+            print(f"Successfully sent set_hvac_mode request to {entity_id}.")
         else:
-            print(f"Service call returned {res.status_code}. Using fallback log check.")
+            print(f"Service call returned {res.status_code}. Checking logs anyway...")
             print(res.text)
     except Exception as e:
         print(f"Error calling HA service: {e}")
 
-    # Check logs for "async_set_hvac_mode" or similar
+    # Check logs for "set_parameter" which confirms the API client was called
     for _ in range(10):
         try:
             with open(LOG_PATH, "r") as f:
                 logs = f.read()
-                # Check for either the log output of our api call setting the hvac mode or the mock API handling it
-                if "set_parameter(operatingMode" in logs or "Set parameter to the thermostat" in logs or "operatingMode" in logs:
+                # Check for the specific log output from our api call setting the hvac mode
+                if "set_parameter(operatingMode" in logs or "Set parameter to the thermostat" in logs:
                     print("SUCCESS: Integration initialized, entities added, and HVAC mode set successfully.")
                     sys.exit(0)
         except FileNotFoundError:
