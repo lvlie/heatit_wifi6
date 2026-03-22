@@ -54,7 +54,7 @@ def main():
 
     # Because trusted networks is enabled for localhost, we shouldn't necessarily need a token.
     # But just in case, we will generate a valid one dynamically using PyJWT to avoid expiration issues.
-    # The JWT token is created using the secret `dummy_key_for_testing_12345_make_sure_it_is_32_bytes_long_here`
+    # The JWT token is created using the secret `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
     # corresponding to the refresh token ID `22222222222222222222222222222222`.
 
     try:
@@ -66,7 +66,7 @@ def main():
             "iat": datetime.now(timezone.utc),
             "exp": datetime.now(timezone.utc) + timedelta(days=3650)
         }
-        token = jwt.encode(payload, "dummy_key_for_testing_12345_make_sure_it_is_32_bytes_long_here", algorithm="HS256")
+        token = jwt.encode(payload, bytes.fromhex("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), algorithm="HS256")
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
