@@ -3,7 +3,6 @@ import logging
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.climate import ClimateEntity
-
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACMode,
@@ -11,10 +10,7 @@ from homeassistant.components.climate.const import (
     PRESET_ECO,
     PRESET_NONE,
 )
-
-from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode, HVACAction
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 from homeassistant.const import UnitOfTemperature, CONF_HOST, CONF_NAME
 from datetime import timedelta
 from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL, DOMAIN
@@ -35,14 +31,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
         host = entry.data[CONF_HOST]
         _LOGGER.info("Heatit WiFi6 async_setup_entry() name: %s, host: %s", name, host)
 
-
         domain_data = hass.data[DOMAIN][entry.entry_id]
         coordinator = domain_data["coordinator"]
         api = domain_data["api"]
 
         # Use shorter timeout and fewer retries for faster startup - device will connect via polling if needed
         device_id = await api.get_device_id(retries=0, timeout=8)
-
         _LOGGER.debug("Name: %s, device_id: %s", name, device_id)
 
         if device_id == "unknown":
@@ -54,12 +48,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
             # Still create entity - it will retry during async_update
             device_id = f"unknown_{host.replace('.', '_')}"
 
-
         entity = HeatitWiFi6Thermostat(hass, entry, coordinator, api, name, device_id)
         # Don't update before add - let polling handle initial connection to speed up startup
         async_add_entities([entity], False)
         _LOGGER.info("Heatit WiFi6 %s has been added to the list of entities.", name)
-
         return True
     except Exception as err:
         _LOGGER.error(
@@ -69,13 +61,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
         )
         return False
 
-
 class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
     _attr_has_entity_name = True
-    
+
     def __init__(self, hass, entry, coordinator, api, name, device_id):
         super().__init__(coordinator)
-
         _LOGGER.debug("HeatitWiFi6Thermostat::__init__(): %s", name)
         self.hass = hass
         self.entry = entry
@@ -127,10 +117,10 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
         self._hw_firmware = None
 
         self._available = True
-        self._update_internal_state()
 
         # Preset mode: either PRESET_NONE or PRESET_ECO
         self._preset_mode = PRESET_NONE
+        self._update_internal_state()
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
@@ -143,7 +133,6 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
 
     def _update_internal_state(self):
         data = self.coordinator.data
-
         if data:
             self._available = True
             match data.get("parameters", {}).get("sensorMode", None):
@@ -154,7 +143,6 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
                 case _:
                     self._temperature = data.get("internalTemperature", None)
             self._param_operatingMode = data.get("parameters").get("operatingMode")
-
             # Set preset mode according to operating mode: 3 = ECO, 1 = None
             if self._param_operatingMode == 3:
                 self._preset_mode = PRESET_ECO
@@ -277,26 +265,17 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
         return f"heatit_wifi6_{self._device_id}"
 
     @property
-    def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._device_id)},
-            "name": self._name,
-            "manufacturer": "Heatit",
-            "model": "WiFi6 Thermostat",
-            "sw_version": self._hw_firmware,
-        }
-
+    def name(self):
+        if self._name:
+            return self._name
+        else:
+            return ""
 
     @name.setter
     def name(self, name):
         if not name:
             return
         self._name = name
-
-    @property
-    def name(self):
-        return None
-
 
     @property
     def icon(self):
@@ -412,7 +391,10 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
     async def async_set_temperature(self, **kwargs):
         # If the Heatit device is switched off don't change the target temperatures.
         if self._hvac_mode == HVACMode.OFF:
-            _LOGGER.info("async_set_temperature(): The device %s is switched off. Target temperature can changed only when device is on.", self._name)
+            _LOGGER.info(
+                "async_set_temperature(): The device %s is switched off. Target temperature can changed only when device is on.",
+                self._name,
+            )
             await self.coordinator.async_request_refresh()
             self.schedule_update_ha_state()
             self.hass.components.persistent_notification.create(
@@ -458,7 +440,9 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
         if not force and hvac_mode not in self.hvac_modes:
             _LOGGER.error("async_set_hvac_mode(): unsupported HVACMode: %s", str(hvac_mode))
             return
-        if await self._api.set_parameter("operatingMode", self._hvac_mode_to_heatit_operatingmode(hvac_mode)):
+        if await self._api.set_parameter(
+            "operatingMode", self._hvac_mode_to_heatit_operatingmode(hvac_mode)
+        ):
             await self.coordinator.async_request_refresh()
 
     def _hvac_mode_to_heatit_operatingmode(self, mode):
@@ -476,8 +460,6 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
                 )
                 return -1
 
-
-    # Heatit's operatingMode = HVACMode
     def _heatit_operatingmode_to_hvac_mode(self, operatingmode):
         # 0 = Off, 1 = Heat, 2 = Cool, 3 = Eco (Heat but using Eco setpoint)
         match operatingmode:
@@ -496,8 +478,6 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
                 )
                 return None
 
-
-    # Heatit's state = HVACAction
     def _heatit_state_to_hvac_action(self, state):
         match state:
             case "Idle":
