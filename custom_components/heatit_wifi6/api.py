@@ -10,54 +10,42 @@ _LOGGER = logging.getLogger(__name__)
 TLS_CHECK = True
 
 class HeatitWiFi6API:
-    def __init__(self, host):
+    def __init__(self, host, session=None):
         self.__host = host.rstrip("/")
+        self._session = session
 
     async def _get(self, endpoint):  # simple general http-get
-        url = f"{self.__host}{endpoint}"
-        _LOGGER.debug("aiohttp - Get url: %s", url)
-
-        try:
-            async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
-                async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
-                    async with session.get(url, timeout=5) as response:
-                        text = await response.text()
-                        _LOGGER.debug(f"Response (get %s) data:\n%s", url, str(text))
-                        return await self._parse_json(text)
-        except Exception as e:
-            _LOGGER.error("GET %s failed: %s", url, str(e))
-            return {}
-
+        return await self._request("GET", endpoint)
 
     async def _post(self, endpoint, data):  # simple general http-post
-        url = f"{self.__host}{endpoint}"
-        _LOGGER.debug("aiohttp - Post url: %s", url)
-
-        try:
-            async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
-                async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
-                    async with session.post(url, json=data, timeout=5) as response:
-                        text = await response.text()
-                        _LOGGER.debug(f"Response (post %s) data:\n%s", url, str(text))
-                        return await self._parse_json(text)
-        except Exception as e:
-            _LOGGER.error("POST %s failed: %s", url, str(e))
-            return {}
-
+        return await self._request("POST", endpoint, data=data)
 
     async def _delete(self, endpoint):  # simple general http-delete
+        return await self._request("DELETE", endpoint)
+
+    async def _request(self, method, endpoint, data=None):
         url = f"{self.__host}{endpoint}"
-        _LOGGER.debug("aiohttp - Delete url: %s", url)
+        _LOGGER.debug("aiohttp - %s url: %s", method, url)
+
+        if self._session:
+            return await self._do_request(self._session, method, url, data)
 
         try:
             async with aiohttp.TCPConnector(ssl=TLS_CHECK, resolver=aiohttp.resolver.ThreadedResolver()) as conn:
                 async with aiohttp.ClientSession(connector=conn, trust_env=False) as session:
-                    async with session.delete(url, timeout=5) as response:
-                        text = await response.text()
-                        _LOGGER.debug(f"Response (delete %s) data:\n%s", url, str(text))
-                        return await self._parse_json(text)
+                    return await self._do_request(session, method, url, data)
         except Exception as e:
-            _LOGGER.error("DELETE %s failed: %s", url, str(e))
+            _LOGGER.error("%s %s failed: %s", method, url, str(e))
+            return {}
+
+    async def _do_request(self, session, method, url, data=None):
+        try:
+            async with session.request(method, url, json=data, timeout=5) as response:
+                text = await response.text()
+                _LOGGER.debug(f"Response (%s %s) data:\n%s", method, url, str(text))
+                return await self._parse_json(text)
+        except Exception as e:
+            _LOGGER.error("%s %s failed: %s", method, url, str(e))
             return {}
 
 

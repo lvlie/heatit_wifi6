@@ -5,6 +5,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import ClimateEntityFeature, HVACMode, HVACAction
 from homeassistant.const import UnitOfTemperature, CONF_HOST, CONF_NAME
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from datetime import timedelta
 from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL
 from .api import HeatitWiFi6API
@@ -24,7 +25,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         host = entry.data[CONF_HOST]  # Get host from UI config
         _LOGGER.info("Heatit WiFi6 async_setup_entry() name: %s, host: %s", name, host)
 
-        api = HeatitWiFi6API(host)
+        session = async_get_clientsession(hass)
+        api = HeatitWiFi6API(host, session)
         device_id = await api.get_device_id()
         _LOGGER.debug("Name: %s, device_id: %s", name, device_id)
         if device_id == "unknown": raise CannotConnect
