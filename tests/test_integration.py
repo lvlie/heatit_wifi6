@@ -50,65 +50,11 @@ def main():
             print("Log file not found.")
         sys.exit(1)
 
-    print("Entity loaded! Attempting to set HVAC mode...")
+    print("Entity loaded! Waiting for startup automation to set HVAC mode...")
 
-    # Because trusted networks is enabled for localhost, we shouldn't necessarily need a token.
-    # But just in case, we will generate a valid one dynamically using PyJWT to avoid expiration issues.
-    # The JWT token is created using the secret `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
-    # corresponding to the refresh token ID `22222222222222222222222222222222`.
-
-    try:
-        import jwt
-        from datetime import datetime, timedelta, timezone
-
-        # HA `jwt_wrapper.verify_and_decode` expects strictly integer timestamps
-        now_ts = int(datetime.now(timezone.utc).timestamp())
-        payload = {
-            "iss": "22222222222222222222222222222222",
-            "iat": now_ts,
-            "exp": now_ts + 3600 * 24 * 365
-        }
-        token = jwt.encode(payload, bytes.fromhex("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), algorithm="HS256")
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-    except ImportError:
-        # Fallback if jwt is not installed, though we pip installed PyJWT in workflow
-        print("PyJWT not installed. Sending request without token (relying on trusted_networks)...")
-        headers = {
-            "Content-Type": "application/json"
-        }
-
-    # We will get the entity ID first by calling the states API
-    entity_id = "climate.mocked_heatit_thermostat"
-    try:
-        res = requests.get(f"{HA_URL}/api/states", headers=headers)
-        if res.status_code == 200:
-            states = res.json()
-            for state in states:
-                if state["entity_id"].startswith("climate.") and "heatit" in state["entity_id"]:
-                    entity_id = state["entity_id"]
-                    print(f"Found climate entity: {entity_id}")
-                    break
-        else:
-            print(f"Failed to fetch states, got {res.status_code}. Proceeding with fallback {entity_id}")
-    except Exception as e:
-        print(f"Error fetching states: {e}")
-
-    payload = {"entity_id": entity_id, "hvac_mode": "heat"}
-    try:
-        res = requests.post(f"{HA_URL}/api/services/climate/set_hvac_mode", json=payload, headers=headers)
-        if res.status_code in [200, 201]:
-            print(f"Successfully sent set_hvac_mode request to {entity_id}.")
-        else:
-            print(f"Service call returned {res.status_code}. Checking logs anyway...")
-            print(res.text)
-    except Exception as e:
-        print(f"Error calling HA service: {e}")
-
-    # Check logs for "set_parameter" which confirms the API client was called
-    for _ in range(10):
+    # Check logs for "set_parameter" which confirms the automation triggered the API client
+    # The automation is configured to run 10 seconds after startup.
+    for _ in range(15):
         try:
             with open(LOG_PATH, "r") as f:
                 logs = f.read()

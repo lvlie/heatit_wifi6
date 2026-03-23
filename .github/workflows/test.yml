@@ -33,6 +33,19 @@ jobs:
             default: info
             logs:
               custom_components.heatit_wifi6: debug
+
+          automation:
+            - alias: "Test HVAC Mode on Startup"
+              trigger:
+                - platform: homeassistant
+                  event: start
+              action:
+                - delay: "00:00:10"
+                - service: climate.set_hvac_mode
+                  target:
+                    entity_id: climate.mocked_heatit_thermostat
+                  data:
+                    hvac_mode: heat
           CONF
 
       - name: Start Home Assistant Container
@@ -121,9 +134,10 @@ jobs:
             auth_providers:
               - type: trusted_networks
                 trusted_networks:
-                  - 127.0.0.1
+                  - 127.0.0.0/8
                   - ::1
-                  - 172.0.0.0/8
+                  - fd00::/8
+                  - 172.16.0.0/12
                   - 192.168.0.0/16
                   - 10.0.0.0/8
                 allow_bypass_login: true
@@ -152,7 +166,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install requests PyJWT
+        run: pip install requests
 
       - name: Run Integration Tests
         run: python3 tests/test_integration.py
