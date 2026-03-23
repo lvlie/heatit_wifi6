@@ -280,16 +280,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
 
     @property
     def name(self):
-        if self._name:
-            return self._name
-        else:
-            return ""
-
-    @name.setter
-    def name(self, name):
-        if not name:
-            return
-        self._name = name
+        return None
 
     @property
     def icon(self):
