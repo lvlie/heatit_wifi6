@@ -59,7 +59,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         return False
 
 class HeatitWiFi6Thermostat(ClimateEntity):
-    attr_has_entity_name = True
+    _attr_has_entity_name = True
     should_poll = False
     SCAN_INTERVAL = timedelta(minutes=POLL_INTERVAL)
 
@@ -269,17 +269,18 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         return f"heatit_wifi6_{self._device_id}"
 
     @property
-    def name(self):
-        if self._name:
-            return self._name
-        else:
-            return ""
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._device_id)},
+            "name": self._name,
+            "manufacturer": "Heatit",
+            "model": "WiFi6 Thermostat",
+            "sw_version": self._hw_firmware,
+        }
 
-    @name.setter
-    def name(self, name):
-        if not name:
-            return
-        self._name = name
+    @property
+    def name(self):
+        return None
 
     @property
     def icon(self):
