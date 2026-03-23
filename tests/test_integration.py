@@ -61,10 +61,12 @@ def main():
         import jwt
         from datetime import datetime, timedelta, timezone
 
+        # HA `jwt_wrapper.verify_and_decode` expects strictly integer timestamps
+        now_ts = int(datetime.now(timezone.utc).timestamp())
         payload = {
             "iss": "22222222222222222222222222222222",
-            "iat": datetime.now(timezone.utc),
-            "exp": datetime.now(timezone.utc) + timedelta(days=3650)
+            "iat": now_ts,
+            "exp": now_ts + 3600 * 24 * 365
         }
         token = jwt.encode(payload, bytes.fromhex("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), algorithm="HS256")
         headers = {
