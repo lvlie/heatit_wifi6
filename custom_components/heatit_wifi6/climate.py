@@ -445,7 +445,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
             _LOGGER.error("async_set_hvac_mode(): unsupported HVACMode: %s", str(hvac_mode))
             return
         if await self._api.set_parameter(
-            "operatingMode", await self._hvac_mode_to_heatit_operatingmode(hvac_mode)
+            "operatingMode", self._hvac_mode_to_heatit_operatingmode(hvac_mode)
         ):
             await self.async_update()
 
