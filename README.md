@@ -40,6 +40,8 @@ This software is a third-party integration and is not affiliated with, maintaine
 * **Energy Meter:** Reset the kWh meter by sending a DELETE request to `/api/reset/kwh` on the device.
 
 ## Version History
+* **1.2.2**
+    * Fixed climate entity and temperature missing due to async property getter.
 * **1.2.1**
     * Fixed dual climate entity popping up 
 * **1.2.0**

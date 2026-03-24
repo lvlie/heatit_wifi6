@@ -308,7 +308,7 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
                 )
                 return -1
 
-    async def _heatit_operatingmode_to_hvac_mode(self, operatingmode):
+    def _heatit_operatingmode_to_hvac_mode(self, operatingmode):
         # 0 = Off, 1 = Heat, 2 = Cool, 3 = Eco (Heat but using Eco setpoint)
         match operatingmode:
             case 0:
