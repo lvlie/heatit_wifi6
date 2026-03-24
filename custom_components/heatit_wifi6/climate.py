@@ -3,6 +3,7 @@ import logging
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.climate import ClimateEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACMode,
@@ -31,21 +32,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
         host = entry.data[CONF_HOST]
         _LOGGER.info("Heatit WiFi6 async_setup_entry() name: %s, host: %s", name, host)
 
-        api = HeatitWiFi6API(host)
-        # Use shorter timeout and fewer retries for faster startup - device will connect via polling if needed
-        device_id = await api.get_device_id(retries=0, timeout=8)
-        _LOGGER.debug("Name: %s, device_id: %s", name, device_id)
+        domain_data = hass.data[DOMAIN][entry.entry_id]
+        coordinator = domain_data["coordinator"]
+        api = domain_data["api"]
+        device_id = domain_data["device_id"]
 
-        if device_id == "unknown":
-            _LOGGER.warning(
-                "Could not connect to device %s at %s during setup. "
-                "Device may be slow to respond or offline. Will retry during polling.",
-                name, host
-            )
-            # Still create entity - it will retry during async_update
-            device_id = f"unknown_{host.replace('.', '_')}"
-
-        entity = HeatitWiFi6Thermostat(hass, entry, api, name, device_id)
+        entity = HeatitWiFi6Thermostat(coordinator, hass, entry, api, name, device_id)
         # Don't update before add - let polling handle initial connection to speed up startup
         async_add_entities([entity], False)
         _LOGGER.info("Heatit WiFi6 %s has been added to the list of entities.", name)
@@ -58,12 +50,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
         )
         return False
 
-class HeatitWiFi6Thermostat(ClimateEntity):
+class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
     _attr_has_entity_name = True
-    should_poll = False
-    SCAN_INTERVAL = timedelta(minutes=POLL_INTERVAL)
 
-    def __init__(self, hass, entry, api, name, device_id):
+    def __init__(self, coordinator, hass, entry, api, name, device_id):
+        super().__init__(coordinator)
         _LOGGER.debug("HeatitWiFi6Thermostat::__init__(): %s", name)
         self.hass = hass
         self.entry = entry
@@ -71,198 +62,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         self._name = name
         self._device_id = device_id
 
-        self._hvac_mode = HVACMode.OFF
-        self._hvac_action = HVACAction.OFF
-        self._temperature = None
         self._set_temperature_pending = False
-
-        self._info_currentPower = None
-        self._info_totalConsumption = None
-        self._info_internalTemperature = None
-        self._info_externalTemperature = None
-        self._info_floorTemperature = None
-        self._param_sensorMode = None
-        self._param_sensorValue = None
-        self._param_heatingSetpoint = None
-        self._param_coolingSetpoint = None
-        self._param_ecoSetpoint = None
-        self._param_internalMinimumTemperatureLimit = None
-        self._param_internalMaximumTemperatureLimit = None
-        self._param_floorMinimumTemperatureLimit = None
-        self._param_floorMaximumTemperatureLimit = None
-        self._param_externalMinimumTemperatureLimit = None
-        self._param_externalMaximumTemperatureLimit = None
-        self._param_internalCalibration = None
-        self._param_floorCalibration = None
-        self._param_externalCalibration = None
-        self._param_regulationMode = None
-        self._param_temperatureControlHysteresis = None
-        self._param_temperatureDisplay = None
-        self._param_activeDisplayBrightness = None
-        self._param_standbyDisplayBrightness = None
-        self._param_actionAfterError = None
-        self._param_powerRegulatorActiveTime = None
-        self._param_operatingMode = None
-        self._param_sizeOfLoad = None
-        self._param_disableButtons = None
-        self._owd_openWindowDetection = None
-        self._owd_activeNow = None
-        self._net_ssid = None
-        self._net_mac = None
-        self._net_ipAddress = None
-        self._net_wifiSignalStrength = None
-        self._net_status = None
-        self._hw_firmware = None
-
-        self._available = True
-
-        # Preset mode: either PRESET_NONE or PRESET_ECO
-        self._preset_mode = PRESET_NONE
-
-    async def async_added_to_hass(self):
-        # Try initial update with retry logic, but don't fail if device is slow to respond
-        # Polling will handle subsequent updates
-        try:
-            await self.async_update()
-        except Exception as e:
-            _LOGGER.debug(
-                "Initial update failed for %s (device may be slow to respond): %s. Polling will retry.",
-                self.name, str(e)
-            )
-        self.should_poll = True
-        _LOGGER.info(
-            "async_added_to_hass(): Heatit WiFi6 integration is ready and polling enabled."
-        )
-
-    async def async_update(self):
-        # Use retry logic for first update attempts, normal timeout for regular polling
-        data = await self._api.get_status(retries=1, timeout=5)
-        if data:
-            self._available = True
-            match data.get("parameters", {}).get("sensorMode", None):
-                case 0:
-                    self._temperature = data.get("floorTemperature", None)
-                case 3 | 4:
-                    self._temperature = data.get("externalTemperature", None)
-                case _:
-                    self._temperature = data.get("internalTemperature", None)
-            self._param_operatingMode = data.get("parameters").get("operatingMode")
-            # Set preset mode according to operating mode: 3 = ECO, 1 = None
-            if self._param_operatingMode == 3:
-                self._preset_mode = PRESET_ECO
-            elif self._param_operatingMode == 1:
-                self._preset_mode = PRESET_NONE
-            else:
-                self._preset_mode = PRESET_NONE
-            self._hvac_mode = await self._heatit_operatingmode_to_hvac_mode(
-                self._param_operatingMode
-            )
-            self._hvac_action = await self._heatit_state_to_hvac_action(
-                data.get("state")
-            )  # _hvac_mode must be set before _hvac_action.
-            if not self._set_temperature_pending:
-                self._param_coolingSetpoint = data.get("parameters", {}).get(
-                    "coolingSetpoint", None
-                )
-                self._param_heatingSetpoint = data.get("parameters", {}).get(
-                    "heatingSetpoint", None
-                )
-                self._param_ecoSetpoint = data.get("parameters", {}).get(
-                    "ecoSetpoint", None
-                )
-
-            self._info_currentPower = data.get("currentPower", None)
-            self._info_totalConsumption = data.get("totalConsumption", None)
-            self._info_internalTemperature = data.get("internalTemperature", None)
-            self._info_externalTemperature = data.get("externalTemperature", None)
-            self._info_floorTemperature = data.get("floorTemperature", None)
-
-            self._param_sensorMode = data.get("parameters", {}).get("sensorMode", None)
-            self._param_sensorValue = data.get("parameters", {}).get(
-                "sensorValue", None
-            )
-            self._param_internalMinimumTemperatureLimit = data.get(
-                "parameters", {}
-            ).get("internalMinimumTemperatureLimit", None)
-            self._param_internalMaximumTemperatureLimit = data.get(
-                "parameters", {}
-            ).get("internalMaximumTemperatureLimit", None)
-            self._param_floorMinimumTemperatureLimit = data.get(
-                "parameters", {}
-            ).get("floorMinimumTemperatureLimit", None)
-            self._param_floorMaximumTemperatureLimit = data.get(
-                "parameters", {}
-            ).get("floorMaximumTemperatureLimit", None)
-            self._param_externalMinimumTemperatureLimit = data.get(
-                "parameters", {}
-            ).get("externalMinimumTemperatureLimit", None)
-            self._param_externalMaximumTemperatureLimit = data.get(
-                "parameters", {}
-            ).get("externalMaximumTemperatureLimit", None)
-            self._param_internalCalibration = data.get("parameters", {}).get(
-                "internalCalibration", None
-            )
-            self._param_floorCalibration = data.get("parameters", {}).get(
-                "floorCalibration", None
-            )
-            self._param_externalCalibration = data.get("parameters", {}).get(
-                "externalCalibration", None
-            )
-            self._param_regulationMode = data.get("parameters", {}).get(
-                "regulationMode", None
-            )
-            self._param_temperatureControlHysteresis = data.get(
-                "parameters", {}
-            ).get("temperatureControlHysteresis", None)
-            self._param_temperatureDisplay = data.get("parameters", {}).get(
-                "temperatureDisplay", None
-            )
-            self._param_activeDisplayBrightness = data.get("parameters", {}).get(
-                "activeDisplayBrightness", None
-            )
-            self._param_standbyDisplayBrightness = data.get(
-                "parameters", {}
-            ).get("standbyDisplayBrightness", None
-            )
-            self._param_actionAfterError = data.get("parameters", {}).get(
-                "actionAfterError", None
-            )
-            self._param_powerRegulatorActiveTime = data.get("parameters", {}).get(
-                "powerRegulatorActiveTime", None
-            )
-            self._param_sizeOfLoad = data.get("parameters", {}).get(
-                "sizeOfLoad", None
-            )
-            self._param_disableButtons = data.get("parameters", {}).get(
-                "disableButtons", None
-            )
-
-            self._owd_openWindowDetection = data.get("parameters", {}).get(
-                "OWD", {}
-            ).get("openWindowDetection", None)
-            self._owd_activeNow = data.get("parameters", {}).get("OWD", {}).get(
-                "activeNow", None
-            )
-            self._net_ssid = data.get("network", {}).get("SSID", None)
-            self._net_mac = data.get("network", {}).get("mac", None)
-            self._net_ipAddress = data.get("network", {}).get("ipAddress", None)
-            self._net_wifiSignalStrength = data.get("network", {}).get(
-                "wifiSignalStrength", None
-            )
-            self._net_status = data.get("network", {}).get("status", None)
-            self._hw_firmware = data.get("firmware", None)
-
-            _LOGGER.debug("Status fetched from the Heatit WiFi6: %s", self.name)
-        else:
-            _LOGGER.debug(
-                "Status fetch failed from the Heatit WiFi6: %s. Device may be slow to respond or temporarily offline. Will retry on next poll.",
-                self.name
-            )
-            self._available = False
-            self._param_operatingMode = None
-            self._hvac_mode = HVACMode.OFF
-            self._hvac_action = HVACAction.OFF
-            self._net_status = "fail"
 
     @property
     def unique_id(self):
@@ -270,12 +70,15 @@ class HeatitWiFi6Thermostat(ClimateEntity):
 
     @property
     def device_info(self):
+        hw_firmware = None
+        if self.coordinator.data:
+            hw_firmware = self.coordinator.data.get("firmware", None)
         return {
             "identifiers": {(DOMAIN, self._device_id)},
             "name": self._name,
             "manufacturer": "Heatit",
             "model": "WiFi6 Thermostat",
-            "sw_version": self._hw_firmware,
+            "sw_version": hw_firmware,
         }
 
     @property
@@ -295,27 +98,45 @@ class HeatitWiFi6Thermostat(ClimateEntity):
 
     @property
     def current_temperature(self):
-        return self._temperature
+        data = self.coordinator.data
+        if not data:
+            return None
+        sensor_mode = data.get("parameters", {}).get("sensorMode", None)
+        match sensor_mode:
+            case 0:
+                return data.get("floorTemperature", None)
+            case 3 | 4:
+                return data.get("externalTemperature", None)
+            case _:
+                return data.get("internalTemperature", None)
 
     @property
     def target_temperature(self):
-        match self._param_operatingMode:
+        data = self.coordinator.data
+        if not data:
+            return None
+        operating_mode = data.get("parameters", {}).get("operatingMode")
+        match operating_mode:
             case 1:
-                return self._param_heatingSetpoint
+                return data.get("parameters", {}).get("heatingSetpoint", None)
             case 2:
-                return self._param_coolingSetpoint
+                return data.get("parameters", {}).get("coolingSetpoint", None)
             case 3:
-                return self._param_ecoSetpoint
+                return data.get("parameters", {}).get("ecoSetpoint", None)
             case _:
                 return None
 
     @property
     def hvac_mode(self):
-        return self._hvac_mode
+        data = self.coordinator.data
+        if not data:
+            return HVACMode.OFF
+        operating_mode = data.get("parameters", {}).get("operatingMode")
+        return self._heatit_operatingmode_to_hvac_mode(operating_mode)
 
     @property
     def hvac_modes(self):
-        match self._hvac_mode:
+        match self.hvac_mode:
             case HVACMode.HEAT:
                 return [HVACMode.OFF, HVACMode.HEAT]
             case HVACMode.COOL:
@@ -325,7 +146,11 @@ class HeatitWiFi6Thermostat(ClimateEntity):
 
     @property
     def hvac_action(self):
-        return self._hvac_action
+        data = self.coordinator.data
+        if not data:
+            return HVACAction.OFF
+        state = data.get("state")
+        return self._heatit_state_to_hvac_action(state)
 
     @property
     def supported_features(self):
@@ -342,66 +167,75 @@ class HeatitWiFi6Thermostat(ClimateEntity):
 
     @property
     def preset_mode(self):
-        return self._preset_mode
+        data = self.coordinator.data
+        if not data:
+            return PRESET_NONE
+        operating_mode = data.get("parameters", {}).get("operatingMode")
+        if operating_mode == 3:
+            return PRESET_ECO
+        return PRESET_NONE
 
     @property
     def extra_state_attributes(self):
+        data = self.coordinator.data
+        if not data:
+            return {}
+
         # Expose operating_mode (raw value) and all the previous attributes
         attrs = {
-            "operating_mode": self._param_operatingMode,
-            "info_currentPower": self._info_currentPower,
-            "info_totalConsumption": self._info_totalConsumption,
-            "info_internalTemperature": self._info_internalTemperature,
-            "info_externalTemperature": self._info_externalTemperature,
-            "info_floorTemperature": self._info_floorTemperature,
-            "param_sensorMode": SENSORMODES.get(self._param_sensorMode, "Unknown"),
-            "param_sensorValue": SENSORVALUES.get(self._param_sensorValue, "Unknown"),
-            "param_heatingSetpoint": self._param_heatingSetpoint,
-            "param_coolingSetpoint": self._param_coolingSetpoint,
-            "param_ecoSetpoint": self._param_ecoSetpoint,
-            "param_internalMinimumTemperatureLimit": self._param_internalMinimumTemperatureLimit,
-            "param_internalMaximumTemperatureLimit": self._param_internalMaximumTemperatureLimit,
-            "param_floorMinimumTemperatureLimit": self._param_floorMinimumTemperatureLimit,
-            "param_floorMaximumTemperatureLimit": self._param_floorMaximumTemperatureLimit,
-            "param_externalMinimumTemperatureLimit": self._param_externalMinimumTemperatureLimit,
-            "param_externalMaximumTemperatureLimit": self._param_externalMaximumTemperatureLimit,
-            "param_internalCalibration": self._param_internalCalibration,
-            "param_floorCalibration": self._param_floorCalibration,
-            "param_externalCalibration": self._param_externalCalibration,
-            "param_regulationMode": self._param_regulationMode,
-            "param_temperatureControlHysteresis": self._param_temperatureControlHysteresis,
-            "param_temperatureDisplay": self._param_temperatureDisplay,
-            "param_activeDisplayBrightness": self._param_activeDisplayBrightness,
-            "param_standbyDisplayBrightness": self._param_standbyDisplayBrightness,
-            "param_actionAfterError": self._param_actionAfterError,
-            "param_powerRegulatorActiveTime": self._param_powerRegulatorActiveTime,
-            "param_sizeOfLoad": self._param_sizeOfLoad,
-            "param_disableButtons": self._param_disableButtons,
-            "owd_openWindowDetection": self._owd_openWindowDetection,
-            "owd_activeNow": self._owd_activeNow,
-            "net_ssid": self._net_ssid,
-            "net_mac": self._net_mac,
-            "net_ipAddress": self._net_ipAddress,
-            "net_wifiSignalStrength": self._net_wifiSignalStrength,
-            "net_status": self._net_status,
-            "hw_firmware": self._hw_firmware,
+            "operating_mode": data.get("parameters", {}).get("operatingMode", None),
+            "info_currentPower": data.get("currentPower", None),
+            "info_totalConsumption": data.get("totalConsumption", None),
+            "info_internalTemperature": data.get("internalTemperature", None),
+            "info_externalTemperature": data.get("externalTemperature", None),
+            "info_floorTemperature": data.get("floorTemperature", None),
+            "param_sensorMode": SENSORMODES.get(data.get("parameters", {}).get("sensorMode"), "Unknown"),
+            "param_sensorValue": SENSORVALUES.get(data.get("parameters", {}).get("sensorValue"), "Unknown"),
+            "param_heatingSetpoint": data.get("parameters", {}).get("heatingSetpoint", None),
+            "param_coolingSetpoint": data.get("parameters", {}).get("coolingSetpoint", None),
+            "param_ecoSetpoint": data.get("parameters", {}).get("ecoSetpoint", None),
+            "param_internalMinimumTemperatureLimit": data.get("parameters", {}).get("internalMinimumTemperatureLimit", None),
+            "param_internalMaximumTemperatureLimit": data.get("parameters", {}).get("internalMaximumTemperatureLimit", None),
+            "param_floorMinimumTemperatureLimit": data.get("parameters", {}).get("floorMinimumTemperatureLimit", None),
+            "param_floorMaximumTemperatureLimit": data.get("parameters", {}).get("floorMaximumTemperatureLimit", None),
+            "param_externalMinimumTemperatureLimit": data.get("parameters", {}).get("externalMinimumTemperatureLimit", None),
+            "param_externalMaximumTemperatureLimit": data.get("parameters", {}).get("externalMaximumTemperatureLimit", None),
+            "param_internalCalibration": data.get("parameters", {}).get("internalCalibration", None),
+            "param_floorCalibration": data.get("parameters", {}).get("floorCalibration", None),
+            "param_externalCalibration": data.get("parameters", {}).get("externalCalibration", None),
+            "param_regulationMode": data.get("parameters", {}).get("regulationMode", None),
+            "param_temperatureControlHysteresis": data.get("parameters", {}).get("temperatureControlHysteresis", None),
+            "param_temperatureDisplay": data.get("parameters", {}).get("temperatureDisplay", None),
+            "param_activeDisplayBrightness": data.get("parameters", {}).get("activeDisplayBrightness", None),
+            "param_standbyDisplayBrightness": data.get("parameters", {}).get("standbyDisplayBrightness", None),
+            "param_actionAfterError": data.get("parameters", {}).get("actionAfterError", None),
+            "param_powerRegulatorActiveTime": data.get("parameters", {}).get("powerRegulatorActiveTime", None),
+            "param_sizeOfLoad": data.get("parameters", {}).get("sizeOfLoad", None),
+            "param_disableButtons": data.get("parameters", {}).get("disableButtons", None),
+            "owd_openWindowDetection": data.get("parameters", {}).get("OWD", {}).get("openWindowDetection", None),
+            "owd_activeNow": data.get("parameters", {}).get("OWD", {}).get("activeNow", None),
+            "net_ssid": data.get("network", {}).get("SSID", None),
+            "net_mac": data.get("network", {}).get("mac", None),
+            "net_ipAddress": data.get("network", {}).get("ipAddress", None),
+            "net_wifiSignalStrength": data.get("network", {}).get("wifiSignalStrength", None),
+            "net_status": data.get("network", {}).get("status", None),
+            "hw_firmware": data.get("firmware", None),
         }
         return attrs
 
     @property
     def available(self) -> bool:
         """Return True if device is available."""
-        return self._available
+        return self.coordinator.last_update_success
 
     async def async_set_temperature(self, **kwargs):
         # If the Heatit device is switched off don't change the target temperatures.
-        if self._hvac_mode == HVACMode.OFF:
+        if self.hvac_mode == HVACMode.OFF:
             _LOGGER.info(
                 "async_set_temperature(): The device %s is switched off. Target temperature can changed only when device is on.",
                 self._name,
             )
-            await self.async_update()
-            self.schedule_update_ha_state()
+            await self.coordinator.async_request_refresh()
             self.hass.components.persistent_notification.create(
                 "Target temperature can changed only when Heatit WiFi6 device is ON.",
                 title="Heatif WiFi6 Thermostat",
@@ -414,7 +248,12 @@ class HeatitWiFi6Thermostat(ClimateEntity):
             )
             return
         self._set_temperature_pending = True
-        match self._param_operatingMode:
+        data = self.coordinator.data
+        if not data:
+            self._set_temperature_pending = False
+            return
+        operating_mode = data.get("parameters", {}).get("operatingMode")
+        match operating_mode:
             case 1:
                 param = "heatingSetpoint"
             case 2:
@@ -422,11 +261,15 @@ class HeatitWiFi6Thermostat(ClimateEntity):
             case 3:
                 param = "ecoSetpoint"
             case _:
+                self._set_temperature_pending = False
                 return
         if await self._api.set_parameter(param, temperature):
-            setattr(self, param, temperature)
+            # Optimistically update the coordinator data with the newly set value
+            # This is optional but helps with responsiveness if we don't want to rely
+            # entirely on the refresh cycle
+            self.coordinator.data.get("parameters", {})[param] = temperature
             self._set_temperature_pending = False
-            await self.async_update()
+            await self.coordinator.async_request_refresh()
         self._set_temperature_pending = False  # also here, if set_parameter() fails.
 
     async def async_set_preset_mode(self, preset_mode):
@@ -439,7 +282,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
             _LOGGER.warning(
                 "async_set_preset_mode(): Unsupported preset_mode: %s", str(preset_mode)
             )
-        await self.async_update()
+        await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode, force=False):
         if not force and hvac_mode not in self.hvac_modes:
@@ -448,7 +291,7 @@ class HeatitWiFi6Thermostat(ClimateEntity):
         if await self._api.set_parameter(
             "operatingMode", self._hvac_mode_to_heatit_operatingmode(hvac_mode)
         ):
-            await self.async_update()
+            await self.coordinator.async_request_refresh()
 
     def _hvac_mode_to_heatit_operatingmode(self, mode):
         match mode:
@@ -483,12 +326,12 @@ class HeatitWiFi6Thermostat(ClimateEntity):
                 )
                 return None
 
-    async def _heatit_state_to_hvac_action(self, state):
+    def _heatit_state_to_hvac_action(self, state):
         match state:
             case "Idle":
                 return (
                     HVACAction.OFF
-                    if self._hvac_mode == HVACMode.OFF
+                    if self.hvac_mode == HVACMode.OFF
                     else HVACAction.IDLE
                 )
             case "Heating":
