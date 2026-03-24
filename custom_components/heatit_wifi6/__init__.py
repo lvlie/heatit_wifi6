@@ -3,6 +3,7 @@ import asyncio
 from datetime import timedelta
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.const import CONF_HOST
@@ -32,6 +33,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     api = HeatitWiFi6API(entry.data[CONF_HOST])
 
+    device_id = await api.get_device_id(retries=1, timeout=10)
+    if device_id == "unknown":
+        raise ConfigEntryNotReady(f"Could not connect to Heatit device at {entry.data[CONF_HOST]}")
+
     async def async_update_data():
         try:
             data = await api.get_status()
@@ -55,6 +60,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
         "api": api,
+        "device_id": device_id,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
