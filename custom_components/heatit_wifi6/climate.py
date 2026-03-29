@@ -13,7 +13,6 @@ from homeassistant.components.climate.const import (
 )
 from homeassistant.const import UnitOfTemperature, CONF_HOST, CONF_NAME
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from datetime import timedelta
 from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL, DOMAIN
 from .api import HeatitWiFi6API
 from .exceptions import CannotConnect
