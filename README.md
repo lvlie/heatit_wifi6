@@ -47,6 +47,8 @@ This software is a third-party integration and is not affiliated with, maintaine
 * **Energy meter:** Reset the kWh meter by sending a DELETE request to `/api/reset/kwh` on the device.
 
 ## Version History
+* **1.3.1**
+    * Documentation: corrected the OpenAPI spec for `POST /api/parameters` to declare a JSON `requestBody` instead of `in: query` parameters, matching the actual device behaviour. This unblocks the Prism-backed integration test in CI.
 * **1.3.0**
     * **Breaking:** The `extra_state_attributes` blob on the climate entity has been removed. Telemetry and parameters are now exposed as dedicated sensor / binary_sensor entities (some are disabled by default — enable them in the entity registry as needed). Update any automations or templates that referenced `state_attr('climate.<id>', 'param_...')` or `info_...` attributes to use the new entities instead.
     * Added internal / external / floor temperature sensors, heating / cooling / eco setpoint diagnostic sensors, and a WiFi signal strength diagnostic sensor.
