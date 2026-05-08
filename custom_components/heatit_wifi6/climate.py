@@ -1,349 +1,215 @@
-import asyncio
-import logging
+"""Climate platform for the Heatit WiFi6 thermostat."""
+from __future__ import annotations
 
-import homeassistant.helpers.config_validation as cv
-from homeassistant.components.climate import ClimateEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.components.climate.const import (
-    ClimateEntityFeature,
-    HVACMode,
-    HVACAction,
+import logging
+from typing import Any
+
+from homeassistant.components.climate import (
+    ATTR_TEMPERATURE,
     PRESET_ECO,
     PRESET_NONE,
+    ClimateEntity,
+    ClimateEntityFeature,
+    HVACAction,
+    HVACMode,
 )
-from homeassistant.const import UnitOfTemperature, CONF_HOST, CONF_NAME
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from .const import SENSORMODES, SENSORVALUES, POLL_INTERVAL, DOMAIN
-from .api import HeatitWiFi6API
-from .exceptions import CannotConnect
+from homeassistant.const import CONF_NAME, UnitOfTemperature
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-PARAM_HEATING_NAME = "heatingSetpoint"
-PARAM_COOLING_NAME = "coolingSetpoint"
-errors = {}
+from . import HeatitWiFi6ConfigEntry
+from .api import HeatitWiFi6API
+from .entity import HeatitWiFi6Entity
 
 _LOGGER = logging.getLogger(__name__)
 
-async def async_setup_entry(hass, entry, async_add_entities):
-    _LOGGER.debug("async_setup_entry(): Heatit WiFi6")
+OPERATING_MODE_OFF = 0
+OPERATING_MODE_HEAT = 1
+OPERATING_MODE_COOL = 2
+OPERATING_MODE_ECO = 3
 
-    try:
-        name = entry.data[CONF_NAME]
-        host = entry.data[CONF_HOST]
-        _LOGGER.info("Heatit WiFi6 async_setup_entry() name: %s, host: %s", name, host)
+SETPOINT_BY_OPERATING_MODE = {
+    OPERATING_MODE_HEAT: "heatingSetpoint",
+    OPERATING_MODE_COOL: "coolingSetpoint",
+    OPERATING_MODE_ECO: "ecoSetpoint",
+}
 
-        domain_data = hass.data[DOMAIN][entry.entry_id]
-        coordinator = domain_data["coordinator"]
-        api = domain_data["api"]
-        device_id = domain_data["device_id"]
 
-        entity = HeatitWiFi6Thermostat(coordinator, hass, entry, api, name, device_id)
-        # Don't update before add - let polling handle initial connection to speed up startup
-        async_add_entities([entity], False)
-        _LOGGER.info("Heatit WiFi6 %s has been added to the list of entities.", name)
-        return True
-    except Exception as err:
-        _LOGGER.error(
-            "Unknown error when trying setup the device: %s. Setup has been interrupted. (%s)",
-            name,
-            str(err),
-        )
-        return False
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: HeatitWiFi6ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the Heatit WiFi6 climate entity from a config entry."""
+    data = entry.runtime_data
+    async_add_entities(
+        [
+            HeatitWiFi6Thermostat(
+                data.coordinator,
+                data.api,
+                entry.data[CONF_NAME],
+                data.device_id,
+            )
+        ]
+    )
 
-class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
-    _attr_has_entity_name = True
 
-    def __init__(self, coordinator, hass, entry, api, name, device_id):
-        super().__init__(coordinator)
-        _LOGGER.debug("HeatitWiFi6Thermostat::__init__(): %s", name)
-        self.hass = hass
-        self.entry = entry
+class HeatitWiFi6Thermostat(HeatitWiFi6Entity, ClimateEntity):
+    """Representation of a Heatit WiFi6 thermostat."""
+
+    _attr_name = None
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_supported_features = (
+        ClimateEntityFeature.TURN_OFF
+        | ClimateEntityFeature.TURN_ON
+        | ClimateEntityFeature.TARGET_TEMPERATURE
+        | ClimateEntityFeature.PRESET_MODE
+    )
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.COOL]
+    _attr_preset_modes = [PRESET_NONE, PRESET_ECO]
+    _attr_min_temp = 5
+    _attr_max_temp = 40
+    _attr_target_temperature_step = 0.5
+
+    def __init__(
+        self,
+        coordinator,
+        api: HeatitWiFi6API,
+        device_name: str,
+        device_id: str,
+    ) -> None:
+        """Initialize the thermostat entity."""
+        super().__init__(coordinator, device_name, device_id)
         self._api = api
-        self._name = name
-        self._device_id = device_id
+        self._attr_unique_id = f"heatit_wifi6_{device_id}"
 
-        self._set_temperature_pending = False
-
-    @property
-    def unique_id(self):
-        return f"heatit_wifi6_{self._device_id}"
+    def _parameters(self) -> dict[str, Any]:
+        data = self.coordinator.data or {}
+        return data.get("parameters") or {}
 
     @property
-    def device_info(self):
-        hw_firmware = None
-        if self.coordinator.data:
-            hw_firmware = self.coordinator.data.get("firmware", None)
-        return {
-            "identifiers": {(DOMAIN, self._device_id)},
-            "name": self._name,
-            "manufacturer": "Heatit",
-            "model": "WiFi6 Thermostat",
-            "sw_version": hw_firmware,
-        }
-
-    @property
-    def name(self):
-        return None
-
-    @property
-    def icon(self):
-        if self.hvac_mode == HVACMode.HEAT:
-            return "mdi:radiator"
-        else:
-            return "mdi:radiator-off"
-
-    @property
-    def temperature_unit(self):
-        return UnitOfTemperature.CELSIUS
-
-    @property
-    def current_temperature(self):
+    def current_temperature(self) -> float | None:
+        """Return current temperature, picked according to active sensor mode."""
         data = self.coordinator.data
         if not data:
             return None
-        sensor_mode = data.get("parameters", {}).get("sensorMode", None)
-        match sensor_mode:
-            case 0:
-                return data.get("floorTemperature", None)
-            case 3 | 4:
-                return data.get("externalTemperature", None)
-            case _:
-                return data.get("internalTemperature", None)
+        sensor_mode = self._parameters().get("sensorMode")
+        if sensor_mode == 0:
+            return data.get("floorTemperature")
+        if sensor_mode in (3, 4):
+            return data.get("externalTemperature")
+        return data.get("internalTemperature")
 
     @property
-    def target_temperature(self):
-        data = self.coordinator.data
-        if not data:
+    def target_temperature(self) -> float | None:
+        """Return setpoint corresponding to the active operating mode."""
+        params = self._parameters()
+        key = SETPOINT_BY_OPERATING_MODE.get(params.get("operatingMode"))
+        if key is None:
             return None
-        operating_mode = data.get("parameters", {}).get("operatingMode")
-        match operating_mode:
-            case 1:
-                return data.get("parameters", {}).get("heatingSetpoint", None)
-            case 2:
-                return data.get("parameters", {}).get("coolingSetpoint", None)
-            case 3:
-                return data.get("parameters", {}).get("ecoSetpoint", None)
-            case _:
-                return None
+        return params.get(key)
 
     @property
-    def hvac_mode(self):
-        data = self.coordinator.data
-        if not data:
+    def hvac_mode(self) -> HVACMode | None:
+        """Return current HVAC mode."""
+        if not self.coordinator.data:
             return HVACMode.OFF
-        operating_mode = data.get("parameters", {}).get("operatingMode")
-        return self._heatit_operatingmode_to_hvac_mode(operating_mode)
+        return self._heatit_operatingmode_to_hvac_mode(
+            self._parameters().get("operatingMode")
+        )
 
     @property
-    def hvac_modes(self):
-        match self.hvac_mode:
-            case HVACMode.HEAT:
-                return [HVACMode.OFF, HVACMode.HEAT]
-            case HVACMode.COOL:
-                return [HVACMode.OFF, HVACMode.COOL]
-            case _:
-                return [HVACMode.OFF, HVACMode.HEAT]
-
-    @property
-    def hvac_action(self):
+    def hvac_action(self) -> HVACAction | None:
+        """Return current HVAC action."""
         data = self.coordinator.data
         if not data:
             return HVACAction.OFF
-        state = data.get("state")
-        return self._heatit_state_to_hvac_action(state)
+        return self._heatit_state_to_hvac_action(data.get("state"))
 
     @property
-    def supported_features(self):
-        return (
-            ClimateEntityFeature.TURN_OFF
-            | ClimateEntityFeature.TURN_ON
-            | ClimateEntityFeature.TARGET_TEMPERATURE
-            | ClimateEntityFeature.PRESET_MODE
-        )
-
-    @property
-    def preset_modes(self):
-        return [PRESET_ECO, PRESET_NONE]
-
-    @property
-    def preset_mode(self):
-        data = self.coordinator.data
-        if not data:
-            return PRESET_NONE
-        operating_mode = data.get("parameters", {}).get("operatingMode")
-        if operating_mode == 3:
+    def preset_mode(self) -> str:
+        """Return the current preset mode (eco or none)."""
+        if self._parameters().get("operatingMode") == OPERATING_MODE_ECO:
             return PRESET_ECO
         return PRESET_NONE
 
-    @property
-    def extra_state_attributes(self):
-        data = self.coordinator.data
-        if not data:
-            return {}
-
-        parameters = data.get("parameters", {})
-        owd = parameters.get("OWD", {})
-        network = data.get("network", {})
-
-        # Expose operating_mode (raw value) and all the previous attributes
-        attrs = {
-            "operating_mode": parameters.get("operatingMode", None),
-            "info_currentPower": data.get("currentPower", None),
-            "info_totalConsumption": data.get("totalConsumption", None),
-            "info_internalTemperature": data.get("internalTemperature", None),
-            "info_externalTemperature": data.get("externalTemperature", None),
-            "info_floorTemperature": data.get("floorTemperature", None),
-            "param_sensorMode": SENSORMODES.get(parameters.get("sensorMode"), "Unknown"),
-            "param_sensorValue": SENSORVALUES.get(parameters.get("sensorValue"), "Unknown"),
-            "param_heatingSetpoint": parameters.get("heatingSetpoint", None),
-            "param_coolingSetpoint": parameters.get("coolingSetpoint", None),
-            "param_ecoSetpoint": parameters.get("ecoSetpoint", None),
-            "param_internalMinimumTemperatureLimit": parameters.get("internalMinimumTemperatureLimit", None),
-            "param_internalMaximumTemperatureLimit": parameters.get("internalMaximumTemperatureLimit", None),
-            "param_floorMinimumTemperatureLimit": parameters.get("floorMinimumTemperatureLimit", None),
-            "param_floorMaximumTemperatureLimit": parameters.get("floorMaximumTemperatureLimit", None),
-            "param_externalMinimumTemperatureLimit": parameters.get("externalMinimumTemperatureLimit", None),
-            "param_externalMaximumTemperatureLimit": parameters.get("externalMaximumTemperatureLimit", None),
-            "param_internalCalibration": parameters.get("internalCalibration", None),
-            "param_floorCalibration": parameters.get("floorCalibration", None),
-            "param_externalCalibration": parameters.get("externalCalibration", None),
-            "param_regulationMode": parameters.get("regulationMode", None),
-            "param_temperatureControlHysteresis": parameters.get("temperatureControlHysteresis", None),
-            "param_temperatureDisplay": parameters.get("temperatureDisplay", None),
-            "param_activeDisplayBrightness": parameters.get("activeDisplayBrightness", None),
-            "param_standbyDisplayBrightness": parameters.get("standbyDisplayBrightness", None),
-            "param_actionAfterError": parameters.get("actionAfterError", None),
-            "param_powerRegulatorActiveTime": parameters.get("powerRegulatorActiveTime", None),
-            "param_sizeOfLoad": parameters.get("sizeOfLoad", None),
-            "param_disableButtons": parameters.get("disableButtons", None),
-            "owd_openWindowDetection": owd.get("openWindowDetection", None),
-            "owd_activeNow": owd.get("activeNow", None),
-            "net_ssid": network.get("SSID", None),
-            "net_mac": network.get("mac", None),
-            "net_ipAddress": network.get("ipAddress", None),
-            "net_wifiSignalStrength": network.get("wifiSignalStrength", None),
-            "net_status": network.get("status", None),
-            "hw_firmware": data.get("firmware", None),
-        }
-        return attrs
-
-    @property
-    def available(self) -> bool:
-        """Return True if device is available."""
-        return self.coordinator.last_update_success
-
-    async def async_set_temperature(self, **kwargs):
-        # If the Heatit device is switched off don't change the target temperatures.
+    async def async_set_temperature(self, **kwargs: Any) -> None:
+        """Set a new target temperature."""
         if self.hvac_mode == HVACMode.OFF:
-            _LOGGER.info(
-                "async_set_temperature(): The device %s is switched off. Target temperature can changed only when device is on.",
-                self._name,
-            )
-            await self.coordinator.async_request_refresh()
-            self.hass.components.persistent_notification.create(
-                "Target temperature can changed only when Heatit WiFi6 device is ON.",
-                title="Heatif WiFi6 Thermostat",
-            )
-            return
-        temperature = kwargs.get("temperature")
-        if temperature is None:
-            _LOGGER.error(
-                "async_set_temperature(): A new target temperature not set/known. Change target value aborted."
-            )
-            return
-        self._set_temperature_pending = True
-        data = self.coordinator.data
-        if not data:
-            self._set_temperature_pending = False
-            return
-        operating_mode = data.get("parameters", {}).get("operatingMode")
-        match operating_mode:
-            case 1:
-                param = "heatingSetpoint"
-            case 2:
-                param = "coolingSetpoint"
-            case 3:
-                param = "ecoSetpoint"
-            case _:
-                self._set_temperature_pending = False
-                return
-        if await self._api.set_parameter(param, temperature):
-            # Optimistically update the coordinator data with the newly set value
-            # This is optional but helps with responsiveness if we don't want to rely
-            # entirely on the refresh cycle
-            self.coordinator.data.get("parameters", {})[param] = temperature
-            self._set_temperature_pending = False
-            await self.coordinator.async_request_refresh()
-        self._set_temperature_pending = False  # also here, if set_parameter() fails.
-
-    async def async_set_preset_mode(self, preset_mode):
-        # Eco: operatingMode=3, None (normal): operatingMode=1
-        if preset_mode == PRESET_ECO:
-            await self._api.set_parameter("operatingMode", 3)
-        elif preset_mode == PRESET_NONE or preset_mode is None:
-            await self._api.set_parameter("operatingMode", 1)
-        else:
             _LOGGER.warning(
-                "async_set_preset_mode(): Unsupported preset_mode: %s", str(preset_mode)
+                "Cannot set target temperature for %s while device is OFF",
+                self._device_name,
             )
+            return
+
+        temperature = kwargs.get(ATTR_TEMPERATURE)
+        if temperature is None:
+            _LOGGER.error("No temperature provided to async_set_temperature")
+            return
+
+        operating_mode = self._parameters().get("operatingMode")
+        param = SETPOINT_BY_OPERATING_MODE.get(operating_mode)
+        if param is None:
+            _LOGGER.error(
+                "Cannot set temperature: unsupported operating mode %s",
+                operating_mode,
+            )
+            return
+
+        if await self._api.set_parameter(param, temperature):
+            params = self.coordinator.data.setdefault("parameters", {})
+            params[param] = temperature
+            self.async_write_ha_state()
+            await self.coordinator.async_request_refresh()
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        """Switch between eco and normal heating modes."""
+        if preset_mode == PRESET_ECO:
+            await self._api.set_parameter("operatingMode", OPERATING_MODE_ECO)
+        elif preset_mode in (PRESET_NONE, None):
+            await self._api.set_parameter("operatingMode", OPERATING_MODE_HEAT)
+        else:
+            _LOGGER.warning("Unsupported preset_mode: %s", preset_mode)
+            return
         await self.coordinator.async_request_refresh()
 
-    async def async_set_hvac_mode(self, hvac_mode, force=False):
-        if not force and hvac_mode not in self.hvac_modes:
-            _LOGGER.error("async_set_hvac_mode(): unsupported HVACMode: %s", str(hvac_mode))
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Set the device's HVAC mode."""
+        operating_mode = self._hvac_mode_to_heatit_operatingmode(hvac_mode)
+        if operating_mode is None:
+            _LOGGER.error("Unsupported HVACMode: %s", hvac_mode)
             return
-        if await self._api.set_parameter(
-            "operatingMode", self._hvac_mode_to_heatit_operatingmode(hvac_mode)
-        ):
+        if await self._api.set_parameter("operatingMode", operating_mode):
             await self.coordinator.async_request_refresh()
 
-    def _hvac_mode_to_heatit_operatingmode(self, mode):
-        match mode:
-            case HVACMode.OFF:
-                return 0
-            case HVACMode.HEAT:
-                return 1
-            case HVACMode.COOL:
-                return 2
-            case _:
-                _LOGGER.error(
-                    "_hvac_mode_to_heatit_operatingmode(): Unsupported mode requested from Home Assistant to Heatit: %s",
-                    str(mode),
-                )
-                return -1
+    @staticmethod
+    def _hvac_mode_to_heatit_operatingmode(mode: HVACMode) -> int | None:
+        if mode == HVACMode.OFF:
+            return OPERATING_MODE_OFF
+        if mode == HVACMode.HEAT:
+            return OPERATING_MODE_HEAT
+        if mode == HVACMode.COOL:
+            return OPERATING_MODE_COOL
+        return None
 
-    def _heatit_operatingmode_to_hvac_mode(self, operatingmode):
-        # 0 = Off, 1 = Heat, 2 = Cool, 3 = Eco (Heat but using Eco setpoint)
-        match operatingmode:
-            case 0:
-                return HVACMode.OFF
-            case 1:
-                return HVACMode.HEAT
-            case 2:
-                return HVACMode.COOL
-            case 3:
-                return HVACMode.HEAT
-            case _:
-                _LOGGER.error(
-                    "_heatit_operatingmode_to_hvac_mode(): Unknown state from Heatit: %s",
-                    str(operatingmode),
-                )
-                return None
+    @staticmethod
+    def _heatit_operatingmode_to_hvac_mode(operating_mode: int | None) -> HVACMode | None:
+        # 0 = Off, 1 = Heat, 2 = Cool, 3 = Eco (Heat with Eco setpoint)
+        if operating_mode == OPERATING_MODE_OFF:
+            return HVACMode.OFF
+        if operating_mode in (OPERATING_MODE_HEAT, OPERATING_MODE_ECO):
+            return HVACMode.HEAT
+        if operating_mode == OPERATING_MODE_COOL:
+            return HVACMode.COOL
+        _LOGGER.error("Unknown operating mode from Heatit: %s", operating_mode)
+        return None
 
-    def _heatit_state_to_hvac_action(self, state):
-        match state:
-            case "Idle":
-                return (
-                    HVACAction.OFF
-                    if self.hvac_mode == HVACMode.OFF
-                    else HVACAction.IDLE
-                )
-            case "Heating":
-                return HVACAction.HEATING
-            case "Cooling":
-                return HVACAction.COOLING
-            case _:
-                _LOGGER.error(
-                    "_heatit_state_to_hvac_action(): Unknown operation mode from Heatit: %s",
-                    str(state),
-                )
-                return None
+    def _heatit_state_to_hvac_action(self, state: str | None) -> HVACAction | None:
+        if state == "Idle":
+            return HVACAction.OFF if self.hvac_mode == HVACMode.OFF else HVACAction.IDLE
+        if state == "Heating":
+            return HVACAction.HEATING
+        if state == "Cooling":
+            return HVACAction.COOLING
+        _LOGGER.error("Unknown state from Heatit: %s", state)
+        return None

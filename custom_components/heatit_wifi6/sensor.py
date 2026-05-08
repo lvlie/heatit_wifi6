@@ -1,135 +1,197 @@
-import logging
+"""Sensor platform for the Heatit WiFi6 thermostat."""
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.sensor import (
-    SensorEntity,
     SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.const import (
-    UnitOfTemperature,
-    UnitOfPower,
-    UnitOfEnergy,
-    CONF_HOST,
     CONF_NAME,
+    EntityCategory,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTemperature,
 )
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .exceptions import CannotConnect
+from . import HeatitWiFi6ConfigEntry
+from .entity import HeatitWiFi6Entity
 
-_LOGGER = logging.getLogger(__name__)
 
-async def async_setup_entry(hass, entry, async_add_entities):
-    _LOGGER.debug("async_setup_entry(): Heatit WiFi6 Sensors")
+@dataclass(frozen=True, kw_only=True)
+class HeatitWiFi6SensorEntityDescription(SensorEntityDescription):
+    """Describe a Heatit WiFi6 sensor."""
 
+    value_fn: Callable[[dict[str, Any]], Any]
+
+
+def _param(name: str) -> Callable[[dict[str, Any]], Any]:
+    return lambda data: (data.get("parameters") or {}).get(name)
+
+
+def _current_temperature(data: dict[str, Any]) -> float | None:
+    sensor_mode = (data.get("parameters") or {}).get("sensorMode")
+    if sensor_mode == 0:
+        return data.get("floorTemperature")
+    if sensor_mode in (3, 4):
+        return data.get("externalTemperature")
+    return data.get("internalTemperature")
+
+
+def _target_temperature(data: dict[str, Any]) -> float | None:
+    params = data.get("parameters") or {}
+    operating_mode = params.get("operatingMode")
+    if operating_mode == 1:
+        return params.get("heatingSetpoint")
+    if operating_mode == 2:
+        return params.get("coolingSetpoint")
+    if operating_mode == 3:
+        return params.get("ecoSetpoint")
+    return None
+
+
+def _wifi_signal(data: dict[str, Any]) -> str | None:
+    return (data.get("network") or {}).get("wifiSignalStrength")
+
+
+SENSOR_DESCRIPTIONS: tuple[HeatitWiFi6SensorEntityDescription, ...] = (
+    HeatitWiFi6SensorEntityDescription(
+        key="current_temperature",
+        translation_key="current_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_current_temperature,
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="target_temperature",
+        translation_key="target_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_target_temperature,
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="power",
+        translation_key="power",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: data.get("currentPower"),
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="energy",
+        translation_key="energy",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda data: data.get("totalConsumption"),
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="internal_temperature",
+        translation_key="internal_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get("internalTemperature"),
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="external_temperature",
+        translation_key="external_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get("externalTemperature"),
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="floor_temperature",
+        translation_key="floor_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get("floorTemperature"),
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="heating_setpoint",
+        translation_key="heating_setpoint",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_param("heatingSetpoint"),
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="cooling_setpoint",
+        translation_key="cooling_setpoint",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_param("coolingSetpoint"),
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="eco_setpoint",
+        translation_key="eco_setpoint",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_param("ecoSetpoint"),
+    ),
+    HeatitWiFi6SensorEntityDescription(
+        key="wifi_signal_strength",
+        translation_key="wifi_signal_strength",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_wifi_signal,
+    ),
+)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: HeatitWiFi6ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the Heatit WiFi6 sensors from a config entry."""
+    data = entry.runtime_data
     name = entry.data[CONF_NAME]
-    host = entry.data[CONF_HOST]
+    async_add_entities(
+        HeatitWiFi6Sensor(data.coordinator, name, data.device_id, description)
+        for description in SENSOR_DESCRIPTIONS
+    )
 
-    domain_data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = domain_data["coordinator"]
-    device_id = domain_data["device_id"]
 
-    entities = [
-        HeatitWiFi6TemperatureSensor(coordinator, name, device_id),
-        HeatitWiFi6TargetTemperatureSensor(coordinator, name, device_id),
-        HeatitWiFi6PowerSensor(coordinator, name, device_id),
-        HeatitWiFi6EnergySensor(coordinator, name, device_id),
-    ]
+class HeatitWiFi6Sensor(HeatitWiFi6Entity, SensorEntity):
+    """A Heatit WiFi6 sensor backed by a SensorEntityDescription."""
 
-    async_add_entities(entities, True)
-    return True
+    entity_description: HeatitWiFi6SensorEntityDescription
 
-class HeatitWiFi6SensorBase(CoordinatorEntity, SensorEntity):
-    """Base class for Heatit WiFi6 sensors."""
-    _attr_has_entity_name = True
-
-    def __init__(self, coordinator, name, device_id):
-        super().__init__(coordinator)
-        self._name = name
-        self._device_id = device_id
+    def __init__(
+        self,
+        coordinator,
+        device_name: str,
+        device_id: str,
+        description: HeatitWiFi6SensorEntityDescription,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, device_name, device_id)
+        self.entity_description = description
+        self._attr_unique_id = f"heatit_wifi6_{device_id}_{description.key}"
 
     @property
-    def device_info(self):
-        hw_firmware = None
-        if self.coordinator.data:
-            hw_firmware = self.coordinator.data.get("firmware", None)
-        return {
-            "identifiers": {(DOMAIN, self._device_id)},
-            "name": self._name,
-            "manufacturer": "Heatit",
-            "model": "WiFi6 Thermostat",
-            "sw_version": hw_firmware,
-        }
-
-class HeatitWiFi6TemperatureSensor(HeatitWiFi6SensorBase):
-    def __init__(self, coordinator, name, device_id):
-        super().__init__(coordinator, name, device_id)
-        self._attr_unique_id = f"heatit_wifi6_{device_id}_current_temperature"
-        self._attr_name = "Current Temperature"
-        self._attr_device_class = SensorDeviceClass.TEMPERATURE
-        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def native_value(self):
+    def native_value(self) -> Any:
         data = self.coordinator.data
         if not data:
             return None
-        sensor_mode = data.get("parameters", {}).get("sensorMode", None)
-        match sensor_mode:
-            case 0: return data.get("floorTemperature", None)
-            case 3 | 4: return data.get("externalTemperature", None)
-            case _: return data.get("internalTemperature", None)
-
-class HeatitWiFi6TargetTemperatureSensor(HeatitWiFi6SensorBase):
-    def __init__(self, coordinator, name, device_id):
-        super().__init__(coordinator, name, device_id)
-        self._attr_unique_id = f"heatit_wifi6_{device_id}_target_temperature"
-        self._attr_name = "Target Temperature"
-        self._attr_device_class = SensorDeviceClass.TEMPERATURE
-        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def native_value(self):
-        data = self.coordinator.data
-        if not data:
-            return None
-        operating_mode = data.get("parameters", {}).get("operatingMode")
-        match operating_mode:
-            case 1: return data.get("parameters", {}).get("heatingSetpoint", None)
-            case 2: return data.get("parameters", {}).get("coolingSetpoint", None)
-            case 3: return data.get("parameters", {}).get("ecoSetpoint", None)
-            case _: return None
-
-class HeatitWiFi6PowerSensor(HeatitWiFi6SensorBase):
-    def __init__(self, coordinator, name, device_id):
-        super().__init__(coordinator, name, device_id)
-        self._attr_unique_id = f"heatit_wifi6_{device_id}_power"
-        self._attr_name = "Power"
-        self._attr_device_class = SensorDeviceClass.POWER
-        self._attr_native_unit_of_measurement = UnitOfPower.WATT
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-
-    @property
-    def native_value(self):
-        data = self.coordinator.data
-        if not data:
-            return None
-        return data.get("currentPower", None)
-
-class HeatitWiFi6EnergySensor(HeatitWiFi6SensorBase):
-    def __init__(self, coordinator, name, device_id):
-        super().__init__(coordinator, name, device_id)
-        self._attr_unique_id = f"heatit_wifi6_{device_id}_energy"
-        self._attr_name = "Energy"
-        self._attr_device_class = SensorDeviceClass.ENERGY
-        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
-
-    @property
-    def native_value(self):
-        data = self.coordinator.data
-        if not data:
-            return None
-        return data.get("totalConsumption", None)
+        return self.entity_description.value_fn(data)

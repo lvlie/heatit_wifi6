@@ -33,13 +33,25 @@ This software is a third-party integration and is not affiliated with, maintaine
 6. Submit the configuration.
 
 ## Features & Usage
-* **Sensor Modes:** Supports Floor, Internal, and External sensor modes. The current temperature entity automatically reflects the active sensor mode.
-* **Attributes:** Detailed thermostat parameters are exposed as device attributes.
-* **Polling:** The integration polls the device once per minute for status updates.
-* **Advanced Control:** Parameters can be changed via HTTP POST requests to `/api/parameters` on the device. For technical details, refer to the OpenAPI documentation in the `docs` folder.
-* **Energy Meter:** Reset the kWh meter by sending a DELETE request to `/api/reset/kwh` on the device.
+* **Climate entity:** Heat / Cool / Off modes, target temperature, and an Eco preset.
+* **Sensor modes:** Supports Floor, Internal, and External sensor modes. The climate entity's current temperature automatically reflects the active sensor mode.
+* **Sensors (enabled by default):** Current temperature, target temperature, power, and energy.
+* **Sensors (disabled by default, enable per-entity if needed):**
+    * Internal, external, and floor temperatures (always available, regardless of sensor mode)
+    * Heating, cooling, and eco setpoints (diagnostic)
+    * WiFi signal strength (diagnostic)
+* **Binary sensors:** Open window detected, and open window detection enabled (diagnostic).
+* **Device page:** Each thermostat is linked to its web UI via the `Visit` button (uses the device's local IP) and shows the WiFi MAC under connections.
+* **Polling:** Local polling once per minute.
+* **Advanced control:** Parameters can be changed via HTTP POST to `/api/parameters` on the device. See the OpenAPI documentation in the `docs` folder.
+* **Energy meter:** Reset the kWh meter by sending a DELETE request to `/api/reset/kwh` on the device.
 
 ## Version History
+* **1.3.0**
+    * **Breaking:** The `extra_state_attributes` blob on the climate entity has been removed. Telemetry and parameters are now exposed as dedicated sensor / binary_sensor entities (some are disabled by default — enable them in the entity registry as needed). Update any automations or templates that referenced `state_attr('climate.<id>', 'param_...')` or `info_...` attributes to use the new entities instead.
+    * Added internal / external / floor temperature sensors, heating / cooling / eco setpoint diagnostic sensors, and a WiFi signal strength diagnostic sensor.
+    * Added open-window-detected and open-window-detection-enabled binary sensors.
+    * Aligned the integration with Home Assistant's developer guidelines: `entry.runtime_data`, shared entity base class, `quality_scale: bronze`, `configuration_url` and MAC connection on the device, translation-keyed entity names.
 * **1.2.2**
     * Fixed climate entity and temperature missing due to async property getter.
 * **1.2.1**
