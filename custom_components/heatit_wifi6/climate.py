@@ -42,15 +42,19 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Heatit WiFi6 climate entity from a config entry."""
     data = entry.runtime_data
+    name = entry.data[CONF_NAME]
     async_add_entities(
         [
             HeatitWiFi6Thermostat(
                 data.coordinator,
                 data.api,
-                entry.data[CONF_NAME],
+                name,
                 data.device_id,
             )
         ]
+    )
+    _LOGGER.info(
+        "Heatit WiFi6 climate entity for %s added to the list of entities", name
     )
 
 
