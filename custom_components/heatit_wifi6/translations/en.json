@@ -20,6 +20,14 @@
       }
    },
    "entity": {
+      "binary_sensor": {
+         "open_window_detected": {
+            "name": "Open window detected"
+         },
+         "open_window_detection_enabled": {
+            "name": "Open window detection"
+         }
+      },
       "sensor": {
          "current_temperature": {
             "name": "Current temperature"
@@ -32,6 +40,27 @@
          },
          "energy": {
             "name": "Energy"
+         },
+         "internal_temperature": {
+            "name": "Internal temperature"
+         },
+         "external_temperature": {
+            "name": "External temperature"
+         },
+         "floor_temperature": {
+            "name": "Floor temperature"
+         },
+         "heating_setpoint": {
+            "name": "Heating setpoint"
+         },
+         "cooling_setpoint": {
+            "name": "Cooling setpoint"
+         },
+         "eco_setpoint": {
+            "name": "Eco setpoint"
+         },
+         "wifi_signal_strength": {
+            "name": "WiFi signal strength"
          }
       }
    }

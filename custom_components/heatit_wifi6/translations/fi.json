@@ -20,6 +20,14 @@
       }
    },
    "entity": {
+      "binary_sensor": {
+         "open_window_detected": {
+            "name": "Avoin ikkuna havaittu"
+         },
+         "open_window_detection_enabled": {
+            "name": "Avoimen ikkunan tunnistus"
+         }
+      },
       "sensor": {
          "current_temperature": {
             "name": "Lämpötila"
@@ -32,6 +40,27 @@
          },
          "energy": {
             "name": "Energia"
+         },
+         "internal_temperature": {
+            "name": "Sisäinen lämpötila"
+         },
+         "external_temperature": {
+            "name": "Ulkoinen lämpötila"
+         },
+         "floor_temperature": {
+            "name": "Lattialämpötila"
+         },
+         "heating_setpoint": {
+            "name": "Lämmityksen asetusarvo"
+         },
+         "cooling_setpoint": {
+            "name": "Jäähdytyksen asetusarvo"
+         },
+         "eco_setpoint": {
+            "name": "Eco-asetusarvo"
+         },
+         "wifi_signal_strength": {
+            "name": "WiFi-signaalin voimakkuus"
          }
       }
    }

@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, TypeAlias
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, Platform
@@ -17,10 +18,28 @@ from .const import DOMAIN, POLL_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.CLIMATE,
+    Platform.SENSOR,
+]
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+@dataclass
+class HeatitWiFi6Data:
+    """Runtime data for a configured Heatit WiFi6 device."""
+
+    coordinator: DataUpdateCoordinator[dict[str, Any]]
+    api: HeatitWiFi6API
+    device_id: str
+
+
+HeatitWiFi6ConfigEntry: TypeAlias = ConfigEntry[HeatitWiFi6Data]
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: HeatitWiFi6ConfigEntry
+) -> bool:
     """Set up Heatit WiFi6 from a config entry."""
     host = entry.data[CONF_HOST]
     _LOGGER.debug("Setting up Heatit WiFi6 entry for host: %s", host)
@@ -53,21 +72,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {
-        "coordinator": coordinator,
-        "api": api,
-        "device_id": device_id,
-    }
+    entry.runtime_data = HeatitWiFi6Data(
+        coordinator=coordinator,
+        api=api,
+        device_id=device_id,
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(
+    hass: HomeAssistant, entry: HeatitWiFi6ConfigEntry
+) -> bool:
     """Unload a Heatit WiFi6 config entry."""
     _LOGGER.debug("Unloading Heatit WiFi6 entry for host: %s", entry.data[CONF_HOST])
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-    return unload_ok
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

@@ -13,17 +13,13 @@ from homeassistant.components.climate import (
     HVACAction,
     HVACMode,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-)
 
+from . import HeatitWiFi6ConfigEntry
 from .api import HeatitWiFi6API
-from .const import DOMAIN, SENSORMODES, SENSORVALUES
+from .entity import HeatitWiFi6Entity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,27 +37,26 @@ SETPOINT_BY_OPERATING_MODE = {
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: HeatitWiFi6ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Heatit WiFi6 climate entity from a config entry."""
-    domain_data = hass.data[DOMAIN][entry.entry_id]
+    data = entry.runtime_data
     async_add_entities(
         [
             HeatitWiFi6Thermostat(
-                domain_data["coordinator"],
-                domain_data["api"],
+                data.coordinator,
+                data.api,
                 entry.data[CONF_NAME],
-                domain_data["device_id"],
+                data.device_id,
             )
         ]
     )
 
 
-class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
+class HeatitWiFi6Thermostat(HeatitWiFi6Entity, ClimateEntity):
     """Representation of a Heatit WiFi6 thermostat."""
 
-    _attr_has_entity_name = True
     _attr_name = None
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_supported_features = (
@@ -78,36 +73,15 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
 
     def __init__(
         self,
-        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        coordinator,
         api: HeatitWiFi6API,
-        name: str,
+        device_name: str,
         device_id: str,
     ) -> None:
         """Initialize the thermostat entity."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, device_name, device_id)
         self._api = api
-        self._device_name = name
-        self._device_id = device_id
         self._attr_unique_id = f"heatit_wifi6_{device_id}"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device registry info."""
-        firmware = None
-        if self.coordinator.data:
-            firmware = self.coordinator.data.get("firmware")
-        return {
-            "identifiers": {(DOMAIN, self._device_id)},
-            "name": self._device_name,
-            "manufacturer": "Heatit",
-            "model": "WiFi6 Thermostat",
-            "sw_version": firmware,
-        }
-
-    @property
-    def available(self) -> bool:
-        """Return True if the coordinator was able to fetch data."""
-        return self.coordinator.last_update_success
 
     def _parameters(self) -> dict[str, Any]:
         data = self.coordinator.data or {}
@@ -159,57 +133,6 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
             return PRESET_ECO
         return PRESET_NONE
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose detailed device parameters as state attributes."""
-        data = self.coordinator.data
-        if not data:
-            return {}
-
-        parameters = data.get("parameters", {})
-        owd = parameters.get("OWD", {})
-        network = data.get("network", {})
-
-        return {
-            "operating_mode": parameters.get("operatingMode"),
-            "info_currentPower": data.get("currentPower"),
-            "info_totalConsumption": data.get("totalConsumption"),
-            "info_internalTemperature": data.get("internalTemperature"),
-            "info_externalTemperature": data.get("externalTemperature"),
-            "info_floorTemperature": data.get("floorTemperature"),
-            "param_sensorMode": SENSORMODES.get(parameters.get("sensorMode"), "Unknown"),
-            "param_sensorValue": SENSORVALUES.get(parameters.get("sensorValue"), "Unknown"),
-            "param_heatingSetpoint": parameters.get("heatingSetpoint"),
-            "param_coolingSetpoint": parameters.get("coolingSetpoint"),
-            "param_ecoSetpoint": parameters.get("ecoSetpoint"),
-            "param_internalMinimumTemperatureLimit": parameters.get("internalMinimumTemperatureLimit"),
-            "param_internalMaximumTemperatureLimit": parameters.get("internalMaximumTemperatureLimit"),
-            "param_floorMinimumTemperatureLimit": parameters.get("floorMinimumTemperatureLimit"),
-            "param_floorMaximumTemperatureLimit": parameters.get("floorMaximumTemperatureLimit"),
-            "param_externalMinimumTemperatureLimit": parameters.get("externalMinimumTemperatureLimit"),
-            "param_externalMaximumTemperatureLimit": parameters.get("externalMaximumTemperatureLimit"),
-            "param_internalCalibration": parameters.get("internalCalibration"),
-            "param_floorCalibration": parameters.get("floorCalibration"),
-            "param_externalCalibration": parameters.get("externalCalibration"),
-            "param_regulationMode": parameters.get("regulationMode"),
-            "param_temperatureControlHysteresis": parameters.get("temperatureControlHysteresis"),
-            "param_temperatureDisplay": parameters.get("temperatureDisplay"),
-            "param_activeDisplayBrightness": parameters.get("activeDisplayBrightness"),
-            "param_standbyDisplayBrightness": parameters.get("standbyDisplayBrightness"),
-            "param_actionAfterError": parameters.get("actionAfterError"),
-            "param_powerRegulatorActiveTime": parameters.get("powerRegulatorActiveTime"),
-            "param_sizeOfLoad": parameters.get("sizeOfLoad"),
-            "param_disableButtons": parameters.get("disableButtons"),
-            "owd_openWindowDetection": owd.get("openWindowDetection"),
-            "owd_activeNow": owd.get("activeNow"),
-            "net_ssid": network.get("SSID"),
-            "net_mac": network.get("mac"),
-            "net_ipAddress": network.get("ipAddress"),
-            "net_wifiSignalStrength": network.get("wifiSignalStrength"),
-            "net_status": network.get("status"),
-            "hw_firmware": data.get("firmware"),
-        }
-
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set a new target temperature."""
         if self.hvac_mode == HVACMode.OFF:
@@ -234,7 +157,6 @@ class HeatitWiFi6Thermostat(CoordinatorEntity, ClimateEntity):
             return
 
         if await self._api.set_parameter(param, temperature):
-            # Optimistically update local state to keep the UI responsive.
             params = self.coordinator.data.setdefault("parameters", {})
             params[param] = temperature
             self.async_write_ha_state()
