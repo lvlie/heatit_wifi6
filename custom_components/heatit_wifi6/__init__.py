@@ -1,52 +1,49 @@
+"""The Heatit WiFi6 integration."""
+from __future__ import annotations
+
 import logging
-import asyncio
 from datetime import timedelta
-from homeassistant.core import HomeAssistant
+from typing import Any
+
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST, Platform
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.const import CONF_HOST
-from .const import DOMAIN, POLL_INTERVAL
+
 from .api import HeatitWiFi6API
+from .const import DOMAIN, POLL_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["climate", "sensor"]
+PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.SENSOR]
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    hass.data.setdefault(DOMAIN, {})
-    return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Stagger device connection on startup to avoid all devices connecting at the same time.
-    entries = hass.config_entries.async_entries(DOMAIN)
-    try:
-        index = [e.entry_id for e in entries].index(entry.entry_id)
-    except ValueError:
-        index = 0  # fallback if not found; should never happen
-    wait_seconds = index * 2 + 2  # Always wait at least 2 seconds for the first, 4s for the second, etc.
-    if wait_seconds:
-        _LOGGER.info("Waiting %s seconds before connecting Heatit device for host: %s", wait_seconds, str(entry.data[CONF_HOST]))
-        await asyncio.sleep(wait_seconds)
-    _LOGGER.info("Heatit async_setup_entry() called for host: %s", str(entry.data[CONF_HOST]))
+    """Set up Heatit WiFi6 from a config entry."""
+    host = entry.data[CONF_HOST]
+    _LOGGER.debug("Setting up Heatit WiFi6 entry for host: %s", host)
 
-    api = HeatitWiFi6API(entry.data[CONF_HOST])
+    session = async_get_clientsession(hass)
+    api = HeatitWiFi6API(host, session)
 
     device_id = await api.get_device_id(retries=1, timeout=10)
     if device_id == "unknown":
-        raise ConfigEntryNotReady(f"Could not connect to Heatit device at {entry.data[CONF_HOST]}")
+        raise ConfigEntryNotReady(
+            f"Could not connect to Heatit device at {host}"
+        )
 
-    async def async_update_data():
+    async def async_update_data() -> dict[str, Any]:
         try:
             data = await api.get_status()
-            if not data:
-                raise UpdateFailed("Failed to fetch data from Heatit WiFi6 thermostat")
-            return data
-        except Exception as err:
-            raise UpdateFailed(f"Error communicating with API: {err}")
+        except Exception as err:  # noqa: BLE001 - surface as UpdateFailed
+            raise UpdateFailed(f"Error communicating with API: {err}") from err
+        if not data:
+            raise UpdateFailed("Failed to fetch data from Heatit WiFi6 thermostat")
+        return data
 
-    coordinator = DataUpdateCoordinator(
+    coordinator: DataUpdateCoordinator[dict[str, Any]] = DataUpdateCoordinator(
         hass,
         _LOGGER,
         name=DOMAIN,
@@ -66,8 +63,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    _LOGGER.info("Remove the Heatit device. async_unload_entry() called for host: %s", str(entry.data[CONF_HOST]))
+    """Unload a Heatit WiFi6 config entry."""
+    _LOGGER.debug("Unloading Heatit WiFi6 entry for host: %s", entry.data[CONF_HOST])
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)

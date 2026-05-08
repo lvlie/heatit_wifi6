@@ -1,3 +1,5 @@
+"""Exceptions for the Heatit WiFi6 integration."""
+
 
 class CannotConnect(Exception):
-    """Exception when connect to device failed."""
+    """Raised when a connection to the device cannot be established."""
