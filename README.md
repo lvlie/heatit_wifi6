@@ -47,6 +47,9 @@ This software is a third-party integration and is not affiliated with, maintaine
 * **Energy meter:** Reset the kWh meter by sending a DELETE request to `/api/reset/kwh` on the device.
 
 ## Version History
+* **1.4.0**
+    * Requires Home Assistant 2026.11 or newer.
+    * Climate entity uses the `native_temperature_unit`, `native_current_temperature` and `native_target_temperature` properties. Home Assistant 2026.11 deprecated the old names (they stop working in 2027.11) and logged a warning for this integration at every startup.
 * **1.3.1**
     * Documentation: corrected the OpenAPI spec for `POST /api/parameters` to declare a JSON `requestBody` instead of `in: query` parameters, matching the actual device behaviour. This unblocks the Prism-backed integration test in CI.
 * **1.3.0**

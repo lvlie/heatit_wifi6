@@ -62,7 +62,7 @@ class HeatitWiFi6Thermostat(HeatitWiFi6Entity, ClimateEntity):
     """Representation of a Heatit WiFi6 thermostat."""
 
     _attr_name = None
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_supported_features = (
         ClimateEntityFeature.TURN_OFF
         | ClimateEntityFeature.TURN_ON
@@ -92,7 +92,7 @@ class HeatitWiFi6Thermostat(HeatitWiFi6Entity, ClimateEntity):
         return data.get("parameters") or {}
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Return current temperature, picked according to active sensor mode."""
         data = self.coordinator.data
         if not data:
@@ -105,7 +105,7 @@ class HeatitWiFi6Thermostat(HeatitWiFi6Entity, ClimateEntity):
         return data.get("internalTemperature")
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Return setpoint corresponding to the active operating mode."""
         params = self._parameters()
         key = SETPOINT_BY_OPERATING_MODE.get(params.get("operatingMode"))
